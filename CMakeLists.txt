@@ -1,50 +1,42 @@
 cmake_minimum_required(VERSION 3.20)
 project(ArcnetDriver C)
 
-# Windows 10/11 API seviyesi
 add_definitions(-D_WIN32_WINNT=0x0A00)
-
-# ANSI API kullanıyoruz
 add_definitions(-UUNICODE -U_UNICODE)
-
-# MSVC "güvensiz fonksiyon" uyarılarını kapat
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 # ---------------------------------------------------------
-# Adım 1: USB cihaz tarayıcı (SetupAPI — WinUSB yok)
+# arcnet: static library  (protocol implementation)
+# src/arcnet.c  +  src/arcnet.h  (public header)
+# ---------------------------------------------------------
+add_library(arcnet STATIC src/arcnet.c)
+target_include_directories(arcnet PUBLIC src)
+target_link_libraries(arcnet setupapi.lib winusb.lib)
+
+# ---------------------------------------------------------
+# test_arcnet: end-to-end test executable
+# ---------------------------------------------------------
+add_executable(test_arcnet src/test_arcnet.c)
+target_link_libraries(test_arcnet arcnet)
+
+# ---------------------------------------------------------
+# arcnet_scan: Step 1 - USB device scanner (no WinUSB)
 # ---------------------------------------------------------
 add_executable(arcnet_scan src/main.c)
-
-target_link_libraries(arcnet_scan
-    setupapi.lib
-    cfgmgr32.lib
-)
+target_link_libraries(arcnet_scan setupapi.lib cfgmgr32.lib)
 
 # ---------------------------------------------------------
-# Adım 3: WinUSB probe — cihazı aç, endpoint'leri doğrula
+# winusb_probe: Step 3 - WinUSB endpoint validation
 # ---------------------------------------------------------
 add_executable(winusb_probe src/winusb_probe.c)
-
-target_link_libraries(winusb_probe
-    setupapi.lib
-    winusb.lib
-)
+target_link_libraries(winusb_probe setupapi.lib winusb.lib)
 
 # ---------------------------------------------------------
-# Adım 4: Init + Register komutları
-# ---------------------------------------------------------
-add_executable(arcnet_io src/arcnet_io.c)
-
-target_link_libraries(arcnet_io
-    setupapi.lib
-    winusb.lib
-)
-
-# ---------------------------------------------------------
-# MSVC ortak derleme seçenekleri
+# MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
+    target_compile_options(arcnet       PRIVATE /W3)
+    target_compile_options(test_arcnet  PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
-    target_compile_options(arcnet_io    PRIVATE /W3)
 endif()

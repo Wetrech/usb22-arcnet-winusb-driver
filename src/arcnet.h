@@ -1,0 +1,121 @@
+/*
+ * arcnet.h  --  Public API for the USB22-485 WinUSB user-mode library.
+ *
+ * Hardware  : Contemporary Controls USB22-485 (VID=0x0D0B, PID=0x1002)
+ * Protocol  : reference/usb22-protocol-notes.md (UPDATE 1-6)
+ * Build     : MSVC + CMake; link arcnet.lib (static) + setupapi.lib + winusb.lib
+ */
+
+#ifndef ARCNET_H
+#define ARCNET_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/* -----------------------------------------------------------------------
+ * Device identification
+ * --------------------------------------------------------------------- */
+#define ARC_VID                 0x0D0Bu
+#define ARC_PID                 0x1002u
+
+/* -----------------------------------------------------------------------
+ * USB endpoint addresses  (confirmed by winusb_probe)
+ * --------------------------------------------------------------------- */
+#define ARC_EP_CMD_OUT          0x01u   /* Command channel (host -> device)         */
+#define ARC_EP_EVT_IN           0x81u   /* Response + async events (device -> host) */
+#define ARC_EP_TX_OUT           0x02u   /* ARCNET transmit data (host -> device)    */
+#define ARC_EP_RX_IN            0x86u   /* ARCNET receive data  (device -> host)    */
+
+/* -----------------------------------------------------------------------
+ * Protocol opcodes  (protocol notes UPDATE 2 + 4)
+ * --------------------------------------------------------------------- */
+#define ARC_OPCODE_INIT         0x00u   /* 12 B command / 6 B response              */
+#define ARC_OPCODE_REGISTER     0x01u   /*  5 B command / 7 B response              */
+#define ARC_OPCODE_CMD04        0x04u   /*  2 B command / 4 B response (session start) */
+#define ARC_OPCODE_EVENT        0x20u   /* Unsolicited RECON/status event from device  */
+
+/* -----------------------------------------------------------------------
+ * Timing constants (milliseconds)
+ * --------------------------------------------------------------------- */
+#define ARC_EP_EVT_MAXPACKET    64u     /* EP 0x81 MaxPacketSize (measured)         */
+#define ARC_READ_TIMEOUT_MS     1000u   /* PIPE_TRANSFER_TIMEOUT on EP 0x81         */
+#define ARC_BUDGET_SHORT_MS     1500u   /* Response budget: cmd04 / register        */
+#define ARC_BUDGET_INIT_MS      5000u   /* Response budget: init (~2.5 s on device) */
+#define ARC_RECEIVE_TIMEOUT_MS  200u    /* EP 0x86 timeout per arc_receive() call   */
+
+/* -----------------------------------------------------------------------
+ * Result codes
+ * --------------------------------------------------------------------- */
+typedef enum {
+    ARC_OK           =  0,  /* Success                                     */
+    ARC_NO_PACKET    =  1,  /* arc_receive: channel empty, try again       */
+    ARC_ERR_OPEN     = -1,  /* Device not found or CreateFile failed       */
+    ARC_ERR_IO       = -2,  /* USB read/write failure                      */
+    ARC_ERR_TIMEOUT  = -3,  /* Response budget exhausted                   */
+    ARC_ERR_PARAM    = -4,  /* Invalid argument                            */
+    ARC_ERR_ECHO     = -5,  /* Response echo mismatch                      */
+} arc_result_t;
+
+/* -----------------------------------------------------------------------
+ * API
+ * --------------------------------------------------------------------- */
+
+/* Enable or disable all diagnostic output (default: disabled).
+ * The library is otherwise silent; callers use result codes. */
+void arc_set_verbose(bool enable);
+
+/* Return a short string for a result code (for display). */
+const char *arc_result_str(arc_result_t r);
+
+/* Enumerate CC ARCNET devices.
+ *   paths[]    : caller-supplied array; each element holds a device path.
+ *   maxDevices : capacity of paths[].
+ *   Returns    : number of devices found (0 = none). */
+int arc_list_devices(char paths[][256], int maxDevices);
+
+/* Open a device for use.
+ *   devicePath : WinUSB interface path (from arc_list_devices).
+ *                Pass NULL to auto-select the first CC ARCNET device.
+ *   Returns ARC_OK on success. */
+arc_result_t arc_open(const char *devicePath);
+
+/* Initialize the ARCNET node.
+ *   Runs the full startup sequence internally:
+ *     (1) cmd04  -- session-start command (UPDATE 4)
+ *     (2) handshake -- data-channel probe (UPDATE 5)
+ *     (3) COM20020 config command (UPDATE 6: waits up to 5 s for response)
+ *
+ *   nodeID         : this node's ARCNET address (0x01..0xFE)
+ *   timeout        : reconfiguration timeout byte (0x18 recommended)
+ *   clockPrescaler : COM20020 clock divisor (0x00 = default speed)
+ *   recvBroadcasts : receive broadcast frames (destination = node 0)
+ *
+ *   Returns ARC_OK on success. */
+arc_result_t arc_init(uint8_t nodeID, uint8_t timeout,
+                      uint8_t clockPrescaler, bool recvBroadcasts);
+
+/* Read or write a COM20020 chip register.
+ *   bWrite=false : *value is filled with the register value on return.
+ *   bWrite=true  : *value is written to the register.
+ *   Returns ARC_OK on success. */
+arc_result_t arc_register(bool bWrite, uint8_t reg, uint8_t *value);
+
+/* Transmit an ARCNET packet.
+ *   destNode : destination ARCNET address
+ *   data     : payload bytes (must not be NULL)
+ *   len      : payload length, 1..252
+ *   Returns ARC_OK on success. */
+arc_result_t arc_transmit(uint8_t destNode, const uint8_t *data, int len);
+
+/* Poll for a received ARCNET packet (non-blocking within ARC_RECEIVE_TIMEOUT_MS).
+ *   ARC_OK        : packet received; *src/*dst/*data/*len are valid.
+ *   ARC_NO_PACKET : channel empty; call again later.
+ *   ARC_ERR_IO    : hardware failure.
+ * data[] must be at least 253 bytes. */
+arc_result_t arc_receive(uint8_t *src, uint8_t *dst,
+                         uint8_t *data, int *len);
+
+/* Close device and release all resources. Safe to call multiple times. */
+void arc_close(void);
+
+#endif /* ARCNET_H */
