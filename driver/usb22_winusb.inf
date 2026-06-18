@@ -1,0 +1,88 @@
+; usb22_winusb.inf
+;
+; WinUSB driver binding for Contemporary Controls USB22-485 ARCNET adapter.
+;
+; Target OS    : Windows 10 / 11, 64-bit (amd64)
+; Signing      : UNSIGNED — internal / team use only
+;                Install with signature enforcement disabled (see INSTALL.md)
+; Driver model : INF-only WinUSB (no co-installer DLL required on Win10+)
+;
+; Covered hardware IDs:
+;   USB\VID_0D0B&PID_1002  — USB22-485 firmware-loaded (backplane / DC-485 mode)
+;   USB\VID_0D0B&PID_1003  — USB22-485 firmware-loaded (DC-485 normal mode)
+;
+; Bootloader PIDs (B001..B010) are intentionally omitted.
+; The device self-transitions B001/B002 -> 1002 from EEPROM on plug-in;
+; binding WinUSB to the bootloader PID would interrupt that transition.
+;
+; ===========================================================================
+; NOTE FOR DEVELOPERS — DeviceInterfaceGUID and arcnet.c compatibility
+; ===========================================================================
+; This INF registers devices under a project-specific DeviceInterfaceGUID:
+;
+;   {E6B4B5C0-F74E-4A1D-9B8F-2C3D4E5F6A7B}
+;
+; The current arcnet.c (enum_device_paths) enumerates via the generic
+; GUID_DEVINTERFACE_USB_DEVICE {A5DCBF10-6530-11D2-901F-00C04FB951ED}.
+;
+; After installing this INF, devices are registered ONLY under the custom
+; GUID above, so enum_device_paths() will return 0 (device not found).
+;
+; Required code change in arcnet.c:
+;   Replace the GUID_USB_DEVICE constant value with:
+;     {0xE6B4B5C0u, 0xF74Eu, 0x4A1Du,
+;      {0x9Bu, 0x8Fu, 0x2Cu, 0x3Du, 0x4Eu, 0x5Fu, 0x6Au, 0x7Bu}}
+;   — OR define ARC_INTERFACE_GUID in arcnet.h and reference it in arcnet.c.
+;
+;   If you want to keep backward-compatibility with Zadig-installed devices
+;   (which use GUID_DEVINTERFACE_USB_DEVICE), keep the old GUID in arcnet.c
+;   while piloting this INF; update the GUID only after the team has fully
+;   migrated to this package.
+; ===========================================================================
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGuid   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %Manufacturer%
+DriverVer   = 06/18/2026,1.0.0.0
+PnpLockdown = 1
+
+CatalogFile = usb22_winusb.cat
+
+; ---------------------------------------------------------------------------
+; Device list — firmware-loaded PIDs only
+; ---------------------------------------------------------------------------
+[Manufacturer]
+%Manufacturer% = Devices, NTamd64
+
+[Devices.NTamd64]
+%DeviceName1% = USB_Install, USB\VID_0D0B&PID_1002
+%DeviceName2% = USB_Install, USB\VID_0D0B&PID_1003
+
+; ---------------------------------------------------------------------------
+; Installation — delegate entirely to the in-box winusb.inf
+; ---------------------------------------------------------------------------
+[USB_Install.NTamd64]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.NTamd64.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.NTamd64.HW]
+AddReg = Dev_AddReg
+
+[Dev_AddReg]
+; Register the device under a project-specific interface GUID.
+; WinUsb_Initialize and SetupDiGetClassDevs must use this GUID — see NOTE above.
+HKR,,DeviceInterfaceGUIDs,0x00010000,"{E6B4B5C0-F74E-4A1D-9B8F-2C3D4E5F6A7B}"
+
+; ---------------------------------------------------------------------------
+; Strings
+; ---------------------------------------------------------------------------
+[Strings]
+Manufacturer = "Wetrech"
+DeviceName1  = "USB22-485 ARCNET WinUSB (Backplane, PID 1002)"
+DeviceName2  = "USB22-485 ARCNET WinUSB (DC-485, PID 1003)"

@@ -48,10 +48,11 @@ static bool       g_is_open = false;
 #define VLOG_ERR(fmt, ...) \
     do { if (g_verbose) fprintf(stderr, "[arcnet] " fmt, ##__VA_ARGS__); } while (0)
 
-/* GUID_DEVINTERFACE_USB_DEVICE = {A5DCBF10-6530-11D2-901F-00C04FB951ED} */
+/* Project-specific DeviceInterfaceGUID — must match driver/usb22_winusb.inf [Dev_AddReg].
+ * {E6B4B5C0-F74E-4A1D-9B8F-2C3D4E5F6A7B} */
 static const GUID GUID_USB_DEVICE = {
-    0xA5DCBF10u, 0x6530u, 0x11D2u,
-    { 0x90u, 0x1Fu, 0x00u, 0xC0u, 0x4Fu, 0xB9u, 0x51u, 0xEDu }
+    0xE6B4B5C0u, 0xF74Eu, 0x4A1Du,
+    { 0x9Bu, 0x8Fu, 0x2Cu, 0x3Du, 0x4Eu, 0x5Fu, 0x6Au, 0x7Bu }
 };
 
 /* =======================================================================

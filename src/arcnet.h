@@ -18,6 +18,11 @@
 #define ARC_VID                 0x0D0Bu
 #define ARC_PID                 0x1002u
 
+/* DeviceInterfaceGUID written by usb22_winusb.inf into the registry.
+ * SetupDiGetClassDevs / SetupDiEnumDeviceInterfaces must use this GUID.
+ * Must match [Dev_AddReg] in driver/usb22_winusb.inf exactly. */
+#define ARC_DEVICE_INTERFACE_GUID_STR  "{E6B4B5C0-F74E-4A1D-9B8F-2C3D4E5F6A7B}"
+
 /* -----------------------------------------------------------------------
  * USB endpoint addresses  (confirmed by winusb_probe)
  * --------------------------------------------------------------------- */

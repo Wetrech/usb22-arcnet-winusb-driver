@@ -9,3 +9,4 @@ out/
 .vs/
 reference/DI-SDK/
 .claude/
+driver/*.cat
