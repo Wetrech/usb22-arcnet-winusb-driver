@@ -6,10 +6,14 @@
 
 ---
 
+> **UYARI — BitLocker kullanan makineler:** Shift+Restart → "Sorun giderme → Gelişmiş Seçenekler → Başlangıç Ayarları → Yeniden Başlat → **7**" yöntemini **KULLANMAYIN** — BitLocker kurtarma anahtarı ister ve makineye erişimi keser. Bu makinelerde doğrudan **[Yöntem A](#yöntem-a-signps1-ile-imzala-ve-kur-önerilen--secure-boot-uyumlu)** (sign.ps1) kullanın.
+
+---
+
 ## Bu Paket Ne Yapar?
 
 Windows'un kendi yerleşik sürücüsü olan `winusb.sys`'i USB22-485 cihazına bağlar.
-Harici `.dll` veya kernel sürücüsü içermez; sadece bir `.inf` + `.cat` dosyasıdır.
+Harici `.dll` veya kernel sürücüsü içermez; sadece bir `.inf` dosyası ve `sign.ps1` tarafından kurulum anında üretilen bir `.cat` dosyasından oluşur (`.cat` repoda hazır gelmez — her makinede ayrıca üretilmesi gerekir).
 
 ---
 
@@ -38,6 +42,12 @@ Yönetici PowerShell aç:
 cd C:\ArcnetDriver\driver
 .\sign.ps1
 ```
+
+> **Not:** `"Bu sistemde betik çalıştırma devre dışı bırakıldı"` (*running scripts is disabled*) hatası alırsanız önce şunu çalıştırın:
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
+> Ardından `.\sign.ps1`'i tekrar çalıştırın.
 
 Bu komut:
 - Makineye özgü bir self-signed kod imzalama sertifikası oluşturur
@@ -69,7 +79,8 @@ sign.ps1'i çalıştırdıktan sonra (adım 1 yukarıda):
 
 1. USB22-485'i USB portuna takın.
 2. **Aygıt Yöneticisi**'ni açın (`devmgmt.msc`).
-3. "Diğer aygıtlar" altındaki USB22-485 cihazına **sağ tıklayın →
+3. Cihaz **"Diğer aygıtlar"** altında sarı ünlem işaretiyle **"Bilinmeyen Aygıt /
+   Unknown Device"** veya USB22 benzeri bir adla görünebilir. Cihaza **sağ tıklayın →
    "Sürücüyü güncelleştir"**.
 4. **"Sürücü yazılımı için bilgisayarıma gözat"** seçeneğini seçin.
 5. `driver/` klasörünü gösterin → **İleri**.
