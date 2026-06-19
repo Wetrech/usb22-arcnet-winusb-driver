@@ -6,34 +6,31 @@
  *   2. arc_init(...)         cmd04 + handshake + COM20020 config
  *   3. arc_register(read)    read COM20020 registers 0-7
  *   4. arc_transmit(...)     send test packet to TEST_DEST_NODE
- *   5. receive loop          listen for RECEIVE_LOOP_SEC seconds, print packets
- *
- * To skip transmit: comment out section [4] below.
- * Expected behaviour is identical to the v0.1.0 arcnet_io.exe binary.
+ *   5. receive loop          listen for recv_timeout_sec seconds (skipped with --no-receive)
  */
 
 #include "arcnet.h"
 #include <stdio.h>
 #include <string.h>
-#include <windows.h>    /* GetTickCount64 */
+#include <windows.h>
 
 /*
- * resolve_device_path — WMI DeviceID'den WinUSB arabirim yolu çıkarır.
+ * resolve_device_path -- maps a WMI DeviceID to a WinUSB interface path.
  *
- * wmi_id örneği : "USB\VID_0D0B&PID_1002\5&1234ABCD&0&1"
- * WinUSB yolu   : "\\?\usb#vid_0d0b&pid_1002#5&1234abcd&0&1#{guid}"
+ * wmi_id example : "USB\VID_0D0B&PID_1002\5&1234ABCD&0&1"
+ * WinUSB path    : "\\?\usb#vid_0d0b&pid_1002#5&1234abcd&0&1#{guid}"
  *
- * Son '\' den sonraki parça (instance ID) WinUSB yolunda case-insensitive
- * substring olarak geçer; eşleşen ilk yolu döner. NULL == bulunamadı.
+ * Matches the instance-ID segment (after the last '\') case-insensitively
+ * against all known device paths; returns the first match. NULL = not found.
  */
 static const char *resolve_device_path(const char *wmi_id)
 {
     static char buf[256];
-    char   paths[8][256];
+    char        paths[8][256];
     const char *p;
     const char *inst;
-    size_t il, pl, k;
-    int    n, j;
+    size_t      il, pl, k;
+    int         n, j;
 
     if (!wmi_id) return NULL;
 
@@ -65,6 +62,7 @@ static const char *resolve_device_path(const char *wmi_id)
 
 int main(int argc, char *argv[])
 {
+    arc_ctx_t   *ctx = NULL;
     arc_result_t r;
     uint8_t      val;
     uint8_t      reg;
@@ -95,9 +93,6 @@ int main(int argc, char *argv[])
     printf("  VID=0x%04X  PID=0x%04X\n", ARC_VID, ARC_PID);
     printf("==============================================\n\n");
 
-    /* Enable verbose output so all protocol details are visible */
-    arc_set_verbose(true);
-
     /* ------------------------------------------------------------------ */
     /* [1] Open device                                                     */
     /* ------------------------------------------------------------------ */
@@ -109,18 +104,19 @@ int main(int argc, char *argv[])
     }
     if (dev_to_open)
         printf("  path: %s\n", dev_to_open);
-    r = arc_open(dev_to_open);   /* NULL -> auto-select first device */
-    printf("arc_open: %s\n\n", arc_result_str(r));
-    if (r != ARC_OK) return 1;
+
+    ctx = arc_open(dev_to_open, /*verbose=*/true);
+    printf("arc_open: %s\n\n", ctx ? "ARC_OK" : "ARC_ERR_OPEN");
+    if (!ctx) return 1;
 
     /* ------------------------------------------------------------------ */
     /* [2] Initialize  (cmd04 -> handshake -> COM20020 config)            */
     /* ------------------------------------------------------------------ */
     printf("--- arc_init (nodeID=%d timeout=0x%02X prescaler=0x%02X bcast=%d) ---\n",
            TEST_NODE_ID, TEST_TIMEOUT, TEST_CLOCK_PRESCALER, (int)TEST_RECV_BCAST);
-    r = arc_init(TEST_NODE_ID, TEST_TIMEOUT, TEST_CLOCK_PRESCALER, TEST_RECV_BCAST);
+    r = arc_init(ctx, TEST_NODE_ID, TEST_TIMEOUT, TEST_CLOCK_PRESCALER, TEST_RECV_BCAST);
     printf("arc_init: %s\n\n", arc_result_str(r));
-    if (r != ARC_OK) { arc_close(); return 1; }
+    if (r != ARC_OK) { arc_close(ctx); return 1; }
 
     /* ------------------------------------------------------------------ */
     /* [3] Read COM20020 registers 0-7                                    */
@@ -128,7 +124,7 @@ int main(int argc, char *argv[])
     printf("--- arc_register (read regs 0..7) ---\n");
     for (reg = 0; reg < 8; reg++) {
         val = 0;
-        r = arc_register(false, reg, &val);
+        r = arc_register(ctx, false, reg, &val);
         if (r == ARC_OK)
             printf("  Reg[%u] = 0x%02X\n", reg, val);
         else
@@ -138,14 +134,12 @@ int main(int argc, char *argv[])
 
     /* ------------------------------------------------------------------ */
     /* [4] Transmit a test packet                                         */
-    /*     Comment this block out to run as a receive-only listener.      */
     /* ------------------------------------------------------------------ */
     printf("--- arc_transmit -> node %u ---\n", TEST_DEST_NODE);
-    r = arc_transmit(TEST_DEST_NODE,
+    r = arc_transmit(ctx, TEST_DEST_NODE,
                      (const uint8_t *)TEST_PAYLOAD,
                      (int)strlen(TEST_PAYLOAD));
     printf("arc_transmit: %s\n\n", arc_result_str(r));
-    /* Transmit failures are not fatal; continue to receive loop */
 
     /* ------------------------------------------------------------------ */
     /* [5] Receive loop — skipped when --no-receive / --quick is given   */
@@ -158,7 +152,7 @@ int main(int argc, char *argv[])
         for (;;) {
             memset(data, 0, sizeof(data));
             data_len = 0;
-            r = arc_receive(&src, &dst, data, &data_len);
+            r = arc_receive(ctx, &src, &dst, data, &data_len);
 
             if (r == ARC_OK) {
                 pkt_count++;
@@ -166,24 +160,19 @@ int main(int argc, char *argv[])
                 printf("  Source : %u (0x%02X)\n", src, src);
                 printf("  Dest   : %u (0x%02X)\n", dst, dst);
                 printf("  Length : %d bytes\n",     data_len);
-
                 printf("  Hex    :");
                 for (i = 0; i < data_len; i++) printf(" %02X", data[i]);
                 printf("\n");
-
                 printf("  ASCII  : \"");
                 for (i = 0; i < data_len; i++)
                     putchar((data[i] >= 0x20 && data[i] < 0x7F) ? data[i] : '.');
                 printf("\"\n\n");
                 break;
-
             } else if (r == ARC_ERR_IO) {
                 printf("arc_receive: hardware error, stopping.\n");
                 hw_err = 1;
                 goto done;
             }
-            /* ARC_NO_PACKET — arc_receive returned after pipe timeout (~200 ms);
-             * check whether the overall budget is exhausted. */
             if ((GetTickCount64() - loop_start) >= (ULONGLONG)(recv_timeout_sec * 1000))
                 break;
         }
@@ -194,7 +183,6 @@ int main(int argc, char *argv[])
 
 done:
     printf("\n");
-    arc_close();
-    /* Timeout (paket gelmemesi) normal sonuç; sadece donanım hatası 1 döner */
+    arc_close(ctx);
     return hw_err ? 1 : 0;
 }

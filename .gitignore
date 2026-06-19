@@ -12,3 +12,4 @@ reference/DI-SDK/
 driver/*.cat
 gui/bin/
 gui/obj/
+*.pcapng
