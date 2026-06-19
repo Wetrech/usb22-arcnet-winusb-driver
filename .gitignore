@@ -10,3 +10,5 @@ out/
 reference/DI-SDK/
 .claude/
 driver/*.cat
+gui/bin/
+gui/obj/

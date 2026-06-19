@@ -26,7 +26,7 @@
 #define TEST_PAYLOAD         "HELLO-ARCNET"
 #define RECEIVE_LOOP_SEC     30
 
-int main(void)
+int main(int argc, char *argv[])
 {
     arc_result_t r;
     uint8_t      val;
@@ -36,7 +36,18 @@ int main(void)
     int          data_len;
     int          i;
     int          pkt_count = 0;
+    int          hw_err    = 0;
+    int          recv_timeout_sec = RECEIVE_LOOP_SEC;
+    int          no_receive = 0;
     ULONGLONG    loop_start;
+
+    /* Parse --recv-timeout <saniye> | --no-receive | --quick */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--recv-timeout") == 0 && i + 1 < argc)
+            recv_timeout_sec = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--no-receive") == 0 || strcmp(argv[i], "--quick") == 0)
+            no_receive = 1;
+    }
 
     printf("==============================================\n");
     printf("  USB22-485 ARCNET Library Test\n");
@@ -89,48 +100,53 @@ int main(void)
     /* Transmit failures are not fatal; continue to receive loop */
 
     /* ------------------------------------------------------------------ */
-    /* [5] Receive loop -- listen for RECEIVE_LOOP_SEC seconds            */
+    /* [5] Receive loop — skipped when --no-receive / --quick is given   */
     /* ------------------------------------------------------------------ */
-    printf("--- Receive loop (%d s) ---\n", RECEIVE_LOOP_SEC);
-    printf("Waiting for packets from other nodes... (Ctrl+C to abort)\n\n");
+    if (!no_receive) {
+        printf("--- Receive loop (%d s) ---\n", recv_timeout_sec);
+        printf("Waiting for packets from other nodes...\n\n");
 
-    loop_start = GetTickCount64();
-    while ((GetTickCount64() - loop_start) < (ULONGLONG)(RECEIVE_LOOP_SEC * 1000)) {
+        loop_start = GetTickCount64();
+        for (;;) {
+            memset(data, 0, sizeof(data));
+            data_len = 0;
+            r = arc_receive(&src, &dst, data, &data_len);
 
-        memset(data, 0, sizeof(data));
-        data_len = 0;
-        r = arc_receive(&src, &dst, data, &data_len);
+            if (r == ARC_OK) {
+                pkt_count++;
+                printf("=== Packet #%d received ===\n", pkt_count);
+                printf("  Source : %u (0x%02X)\n", src, src);
+                printf("  Dest   : %u (0x%02X)\n", dst, dst);
+                printf("  Length : %d bytes\n",     data_len);
 
-        if (r == ARC_OK) {
-            pkt_count++;
-            printf("=== Packet #%d received ===\n", pkt_count);
-            printf("  Source : %u (0x%02X)\n", src, src);
-            printf("  Dest   : %u (0x%02X)\n", dst, dst);
-            printf("  Length : %d bytes\n",     data_len);
+                printf("  Hex    :");
+                for (i = 0; i < data_len; i++) printf(" %02X", data[i]);
+                printf("\n");
 
-            printf("  Hex    :");
-            for (i = 0; i < data_len; i++) printf(" %02X", data[i]);
-            printf("\n");
+                printf("  ASCII  : \"");
+                for (i = 0; i < data_len; i++)
+                    putchar((data[i] >= 0x20 && data[i] < 0x7F) ? data[i] : '.');
+                printf("\"\n\n");
+                break;
 
-            printf("  ASCII  : \"");
-            for (i = 0; i < data_len; i++)
-                putchar((data[i] >= 0x20 && data[i] < 0x7F) ? data[i] : '.');
-            printf("\"\n\n");
-
-            break;  /* stop after first packet */
-
-        } else if (r == ARC_ERR_IO) {
-            printf("arc_receive: hardware error, stopping.\n");
-            goto done;
+            } else if (r == ARC_ERR_IO) {
+                printf("arc_receive: hardware error, stopping.\n");
+                hw_err = 1;
+                goto done;
+            }
+            /* ARC_NO_PACKET — arc_receive returned after pipe timeout (~200 ms);
+             * check whether the overall budget is exhausted. */
+            if ((GetTickCount64() - loop_start) >= (ULONGLONG)(recv_timeout_sec * 1000))
+                break;
         }
-        /* ARC_NO_PACKET: channel empty, continue silently */
-    }
 
-    if (pkt_count == 0)
-        printf("Timeout: no packet received in %d seconds.\n", RECEIVE_LOOP_SEC);
+        if (pkt_count == 0)
+            printf("receive: paket alınmadı (süre doldu, %d sn).\n", recv_timeout_sec);
+    }
 
 done:
     printf("\n");
     arc_close();
-    return (pkt_count > 0) ? 0 : 1;
+    /* Timeout (paket gelmemesi) normal sonuç; sadece donanım hatası 1 döner */
+    return hw_err ? 1 : 0;
 }

@@ -591,7 +591,14 @@ arc_result_t arc_receive(uint8_t *src, uint8_t *dst, uint8_t *data, int *len)
         return ARC_ERR_IO;
     }
 
-    /* 2. Read */
+    /* 2. Read — apply timeout on every call so ReadPipe returns after
+     * ARC_RECEIVE_TIMEOUT_MS when no packet is waiting instead of
+     * blocking indefinitely (default timeout = 0 = wait forever). */
+    {
+        ULONG rx_to = ARC_RECEIVE_TIMEOUT_MS;
+        WinUsb_SetPipePolicy(g_dev.usb_handle, ARC_EP_RX_IN,
+                             PIPE_TRANSFER_TIMEOUT, sizeof(rx_to), &rx_to);
+    }
     memset(buf, 0, sizeof(buf));
     xferred = 0;
     if (!WinUsb_ReadPipe(g_dev.usb_handle, ARC_EP_RX_IN,
