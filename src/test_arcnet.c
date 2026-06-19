@@ -17,6 +17,43 @@
 #include <string.h>
 #include <windows.h>    /* GetTickCount64 */
 
+/*
+ * resolve_device_path — WMI DeviceID'den WinUSB arabirim yolu çıkarır.
+ *
+ * wmi_id örneği : "USB\VID_0D0B&PID_1002\5&1234ABCD&0&1"
+ * WinUSB yolu   : "\\?\usb#vid_0d0b&pid_1002#5&1234abcd&0&1#{guid}"
+ *
+ * Son '\' den sonraki parça (instance ID) WinUSB yolunda case-insensitive
+ * substring olarak geçer; eşleşen ilk yolu döner. NULL == bulunamadı.
+ */
+static const char *resolve_device_path(const char *wmi_id)
+{
+    static char buf[256];
+    char   paths[8][256];
+    const char *p;
+    const char *inst;
+    size_t il, pl, k;
+    int    n, j;
+
+    if (!wmi_id) return NULL;
+
+    p    = strrchr(wmi_id, '\\');
+    inst = p ? p + 1 : wmi_id;
+    il   = strlen(inst);
+
+    n = arc_list_devices(paths, 8);
+    for (j = 0; j < n; j++) {
+        pl = strlen(paths[j]);
+        for (k = 0; k + il <= pl; k++) {
+            if (_strnicmp(paths[j] + k, inst, il) == 0) {
+                memcpy(buf, paths[j], pl + 1);
+                return buf;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* ---- Test parameters (adjust as needed) ---- */
 #define TEST_NODE_ID         1
 #define TEST_TIMEOUT         0x18
@@ -39,14 +76,18 @@ int main(int argc, char *argv[])
     int          hw_err    = 0;
     int          recv_timeout_sec = RECEIVE_LOOP_SEC;
     int          no_receive = 0;
+    const char  *device_path_arg = NULL;   /* --device-path <WMI DeviceID> */
+    const char  *dev_to_open;
     ULONGLONG    loop_start;
 
-    /* Parse --recv-timeout <saniye> | --no-receive | --quick */
+    /* Parse --recv-timeout N | --no-receive | --quick | --device-path <id> */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--recv-timeout") == 0 && i + 1 < argc)
             recv_timeout_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "--no-receive") == 0 || strcmp(argv[i], "--quick") == 0)
             no_receive = 1;
+        else if (strcmp(argv[i], "--device-path") == 0 && i + 1 < argc)
+            device_path_arg = argv[++i];
     }
 
     printf("==============================================\n");
@@ -58,10 +99,17 @@ int main(int argc, char *argv[])
     arc_set_verbose(true);
 
     /* ------------------------------------------------------------------ */
-    /* [1] Open device (auto-select first CC ARCNET device)               */
+    /* [1] Open device                                                     */
     /* ------------------------------------------------------------------ */
     printf("--- arc_open ---\n");
-    r = arc_open(NULL);
+    dev_to_open = resolve_device_path(device_path_arg);
+    if (device_path_arg && !dev_to_open) {
+        printf("arc_open: device not found for '%s'\n\n", device_path_arg);
+        return 1;
+    }
+    if (dev_to_open)
+        printf("  path: %s\n", dev_to_open);
+    r = arc_open(dev_to_open);   /* NULL -> auto-select first device */
     printf("arc_open: %s\n\n", arc_result_str(r));
     if (r != ARC_OK) return 1;
 

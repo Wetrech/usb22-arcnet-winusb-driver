@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -34,7 +36,6 @@ public partial class MainWindow : Window
         if (driverDir == null)
         {
             LogEkle("HATA: driver/ klasörü bulunamadı.", BrKirmizi);
-            LogEkle($"  Aranan konum: <exe>/../../.../driver/ (usb22_winusb.inf + sign.ps1 içinde olmalı)", BrKirmizi);
             LogEkle($"  Exe dizini: {AppContext.BaseDirectory}", BrSari);
             return;
         }
@@ -60,7 +61,6 @@ public partial class MainWindow : Window
         if (basarili)
         {
             LogEkle("", BrGri);
-
             switch (KurulumSonrasiTara())
             {
                 case KurulumSonucu.WinUsbHazir:
@@ -73,7 +73,6 @@ public partial class MainWindow : Window
                     LogEkle("⚠  Sürücü eklendi. Cihaz hazırlanıyor, birkaç saniye sonra 'Yenile'ye basın.", BrSari);
                     break;
             }
-
             CihazlariTara();
         }
     }
@@ -90,11 +89,7 @@ public partial class MainWindow : Window
             $"-ExecutionPolicy Bypass -NonInteractive -File \"{signPs1}\"",
             driverDir);
 
-        if (!ok)
-        {
-            LogEkle("✘  sign.ps1 başarısız — kurulum durdu.", BrKirmizi);
-            return false;
-        }
+        if (!ok) { LogEkle("✘  sign.ps1 başarısız — kurulum durdu.", BrKirmizi); return false; }
         LogEkle("✔  Adım 1 tamamlandı.", BrYesil);
         LogEkle("", BrGri);
 
@@ -106,80 +101,135 @@ public partial class MainWindow : Window
             $"/add-driver \"{infPath}\" /install",
             driverDir);
 
-        if (!ok)
-        {
-            LogEkle("✘  pnputil başarısız — sürücü yüklenemedi.", BrKirmizi);
-            return false;
-        }
+        if (!ok) { LogEkle("✘  pnputil başarısız — sürücü yüklenemedi.", BrKirmizi); return false; }
         LogEkle("✔  Adım 2 tamamlandı.", BrYesil);
         return true;
     }
 
-    // ── Test ─────────────────────────────────────────────────────
+    // ── Test: seçili cihaz ───────────────────────────────────────
 
     private async void TestBtn_Click(object sender, RoutedEventArgs e)
     {
-        string? testExe = TestExeBul();
-
         LogPanel.Visibility = Visibility.Visible;
         _loglar.Clear();
 
-        if (testExe == null)
+        var secili = CihazListesi.SelectedItem as CihazSatiri;
+        if (secili == null)
         {
-            LogEkle("HATA: test_arcnet.exe bulunamadı.", BrKirmizi);
-            LogEkle("  Önce 'build.bat' ile C projesini derleyin (build/ klasörüne bakılıyor).", BrSari);
+            LogEkle("Lütfen listeden bir cihaz seçin.", BrSari);
             return;
         }
 
-        LogEkle($"exe  : {testExe}", BrGri);
-        LogEkle($"args : --no-receive", BrGri);
-        LogEkle("", BrGri);
+        string? testExe = TestExeBul();
+        if (testExe == null)
+        {
+            LogEkle("HATA: test_arcnet.exe bulunamadı — önce 'build.bat' ile derleyin.", BrKirmizi);
+            return;
+        }
 
         SetTestUI(calisiyor: true);
-        var satirlar = new List<string>();
-        bool exitOk;
+        TestBtn.Content = "⏳  Test çalışıyor…";
         try
         {
-            exitOk = await KomutCalistirAsync(
-                testExe,
-                "--no-receive",
-                Path.GetDirectoryName(testExe)!,
-                satirlar,
-                timeoutMs: 8_000);
+            await TestEtVeGuncelle(secili, testExe, logBaslik: true);
         }
         finally
         {
-            // İstisna olsa bile UI mutlaka kilidini açar
             SetTestUI(calisiyor: false);
+            TestBtn.Content = "▶  Seçiliyi Test Et";
+        }
+    }
+
+    // ── Test: hepsini sırayla ────────────────────────────────────
+
+    private async void HepsiniTestBtn_Click(object sender, RoutedEventArgs e)
+    {
+        LogPanel.Visibility = Visibility.Visible;
+        _loglar.Clear();
+
+        var cihazlar = (CihazListesi.ItemsSource as IEnumerable<CihazSatiri>)?.ToList();
+        if (cihazlar == null || cihazlar.Count == 0)
+        {
+            LogEkle("Listede cihaz yok — önce 'Yenile'ye basın.", BrSari);
+            return;
         }
 
-        TestCiktisiDegerlendir(satirlar, exitOk);
+        string? testExe = TestExeBul();
+        if (testExe == null)
+        {
+            LogEkle("HATA: test_arcnet.exe bulunamadı — önce 'build.bat' ile derleyin.", BrKirmizi);
+            return;
+        }
+
+        SetTestUI(calisiyor: true);
+        HepsiniTestBtn.Content = "⏳  Test ediliyor…";
+        int basarili = 0;
+        try
+        {
+            for (int idx = 0; idx < cihazlar.Count; idx++)
+            {
+                var c = cihazlar[idx];
+                StatusBar.Text = $"Cihaz {idx + 1}/{cihazlar.Count} test ediliyor…";
+                LogEkle($"── Cihaz {idx + 1}/{cihazlar.Count}: {KisaPath(c.InstancePath)}", BrMavi);
+
+                bool ok = await TestEtVeGuncelle(c, testExe, logBaslik: false);
+                if (ok) basarili++;
+
+                LogEkle("", BrGri);
+            }
+
+            LogEkle($"─── Tamamlandı: {basarili}/{cihazlar.Count} başarılı ───",
+                basarili == cihazlar.Count ? BrYesil : BrSari);
+        }
+        finally
+        {
+            SetTestUI(calisiyor: false);
+            HepsiniTestBtn.Content = "▶▶  Hepsini Test Et";
+        }
     }
 
-    private void SetTestUI(bool calisiyor)
+    // ── Tek cihaz test çekirdeği (her ikisi de buraya gelir) ─────
+
+    private async Task<bool> TestEtVeGuncelle(CihazSatiri cihaz, string testExe, bool logBaslik)
     {
-        _testCalisiyor      = calisiyor;
-        TestBtn.IsEnabled   = !calisiyor;
-        KurBtn.IsEnabled    = !calisiyor;
-        YenileBtn.IsEnabled = !calisiyor;
-        TestBtn.Content     = calisiyor ? "⏳  Test çalışıyor…" : "▶  Bağlantıyı Test Et";
+        if (logBaslik)
+        {
+            LogEkle($"exe  : {testExe}", BrGri);
+            LogEkle($"args : --no-receive --device-path \"{cihaz.InstancePath}\"", BrGri);
+            LogEkle("", BrGri);
+        }
+
+        cihaz.TestSonucu = TestSonucu.Calisiyor;
+
+        var satirlar = new List<string>();
+        bool exitOk = await KomutCalistirAsync(
+            testExe,
+            $"--no-receive --device-path \"{cihaz.InstancePath}\"",
+            Path.GetDirectoryName(testExe)!,
+            satirlar,
+            timeoutMs: 8_000);
+
+        bool basarili = TestSonucunuDegerlendir(satirlar, exitOk);
+        cihaz.TestSonucu = basarili ? TestSonucu.Basarili : TestSonucu.Basarisiz;
+        return basarili;
     }
 
-    private void TestCiktisiDegerlendir(IReadOnlyList<string> satirlar, bool exitOk)
+    private bool TestSonucunuDegerlendir(IReadOnlyList<string> satirlar, bool exitOk)
     {
-        bool initOk       = satirlar.Any(s => s.Contains("arc_init: ARC_OK"));
-        bool transmitOk   = satirlar.Any(s => s.Contains("arc_transmit: ARC_OK"));
-        bool herhangiHata = satirlar.Any(s =>
+        bool initOk     = satirlar.Any(s => s.Contains("arc_init: ARC_OK"));
+        bool transmitOk = satirlar.Any(s => s.Contains("arc_transmit: ARC_OK"));
+        bool hataVar    = satirlar.Any(s =>
             s.Contains("ARC_ERR") || s.Contains("device not found") || s.Contains("hardware error"));
 
         LogEkle("", BrGri);
-        LogEkle("─────────────────── Sonuç ───────────────────────", BrGri);
+        LogEkle("── Sonuç ──────────────────────────────────────", BrGri);
 
         if (initOk && transmitOk)
         {
             LogEkle("✔  Cihaz çalışıyor (init + transmit OK)", BrYesil);
+            return true;
         }
-        else if (herhangiHata)
+        else if (hataVar)
         {
             string ilkHata = satirlar.FirstOrDefault(s =>
                 s.Contains("ARC_ERR") || s.Contains("device not found")) ?? "";
@@ -187,9 +237,25 @@ public partial class MainWindow : Window
         }
         else
         {
-            string detay = exitOk ? "init veya transmit onaylanamadı" : "süreç hata ile çıktı";
-            LogEkle($"✘  Test başarısız: {detay}", BrKirmizi);
+            LogEkle($"✘  Test başarısız: {(exitOk ? "init/transmit onaylanamadı" : "süreç hata ile çıktı")}", BrKirmizi);
         }
+        return false;
+    }
+
+    private void SetTestUI(bool calisiyor)
+    {
+        _testCalisiyor           = calisiyor;
+        TestBtn.IsEnabled        = !calisiyor;
+        HepsiniTestBtn.IsEnabled = !calisiyor;
+        KurBtn.IsEnabled         = !calisiyor;
+        YenileBtn.IsEnabled      = !calisiyor;
+    }
+
+    private static string KisaPath(string path)
+    {
+        // "USB\VID_0D0B&PID_1002\5&1234&0&1" → "5&1234&0&1"
+        int i = path.LastIndexOf('\\');
+        return i >= 0 ? path[(i + 1)..] : path;
     }
 
     private static string? TestExeBul()
@@ -216,7 +282,7 @@ public partial class MainWindow : Window
     {
         var psi = new ProcessStartInfo
         {
-            FileName               = exe,          // tırnaklı path sorununu önlemek için ayrı set
+            FileName               = exe,
             Arguments              = args,
             UseShellExecute        = false,
             RedirectStandardOutput = true,
@@ -265,7 +331,7 @@ public partial class MainWindow : Window
                 }
                 catch (OperationCanceledException)
                 {
-                    try { proc.Kill(entireProcessTree: true); } catch { /* zaten çıkmış olabilir */ }
+                    try { proc.Kill(entireProcessTree: true); } catch { }
                     LogEkle($"  ⏱ Güvenlik zaman aşımı ({timeoutMs / 1000} sn) — process sonlandırıldı.", BrKirmizi);
                     return false;
                 }
@@ -338,10 +404,7 @@ public partial class MainWindow : Window
             }
             return herhangiCihaz ? KurulumSonucu.CihazBootloader : KurulumSonucu.CihazYok;
         }
-        catch
-        {
-            return KurulumSonucu.CihazYok;
-        }
+        catch { return KurulumSonucu.CihazYok; }
     }
 
     // ── Driver klasörü bulma ──────────────────────────────────────
@@ -366,7 +429,6 @@ public partial class MainWindow : Window
 
     private void CihazlariTara()
     {
-        // Test çalışırken WMI ile USB cihaza erişme — çakışmayı önler
         if (_testCalisiyor) return;
 
         StatusBar.Text      = "Taranıyor…";
@@ -383,7 +445,6 @@ public partial class MainWindow : Window
                 string deviceId = obj["DeviceID"]?.ToString() ?? "";
                 string name     = obj["Name"]?.ToString()     ?? "";
                 string service  = obj["Service"]?.ToString()  ?? "";
-
                 liste.Add(new CihazSatiri(CikartPid(deviceId), service, name, deviceId));
             }
         }
@@ -422,10 +483,13 @@ public partial class MainWindow : Window
 
 // ── Veri modelleri ────────────────────────────────────────────────
 
+public enum TestSonucu { Bilinmiyor, Calisiyor, Basarili, Basarisiz }
+
 public record LogGirdi(string Metin, Brush Renk);
 
-public class CihazSatiri
+public class CihazSatiri : INotifyPropertyChanged
 {
+    // Sabit sürücü bilgileri
     public string PID           { get; }
     public string SurucuServisi { get; }
     public string CihazTipi     { get; }
@@ -434,6 +498,62 @@ public class CihazSatiri
     public string Durum         { get; }
     public Brush  RozetArka     { get; }
     public Brush  RozetYazi     { get; }
+
+    // Mutable: test sonucu (INotifyPropertyChanged ile DataGrid'i günceller)
+    private TestSonucu _testSonucu = TestSonucu.Bilinmiyor;
+    public TestSonucu TestSonucu
+    {
+        get => _testSonucu;
+        set
+        {
+            _testSonucu = value;
+            OnPropertyChanged(nameof(TestGorunum));
+            OnPropertyChanged(nameof(TestMetin));
+            OnPropertyChanged(nameof(TestArka));
+            OnPropertyChanged(nameof(TestYazi));
+        }
+    }
+
+    public Visibility TestGorunum =>
+        _testSonucu != TestSonucu.Bilinmiyor ? Visibility.Visible : Visibility.Collapsed;
+
+    public string TestMetin => _testSonucu switch
+    {
+        TestSonucu.Calisiyor => "⏳ Test…",
+        TestSonucu.Basarili  => "✔ Çalışıyor",
+        TestSonucu.Basarisiz => "✗ Hata",
+        _                    => "",
+    };
+
+    public Brush TestArka => _testSonucu switch
+    {
+        TestSonucu.Calisiyor => TArkaC,
+        TestSonucu.Basarili  => TArkaB,
+        TestSonucu.Basarisiz => TArkaH,
+        _                    => TArkaX,
+    };
+
+    public Brush TestYazi => _testSonucu switch
+    {
+        TestSonucu.Calisiyor => TYaziC,
+        TestSonucu.Basarili  => TYaziB,
+        TestSonucu.Basarisiz => TYaziH,
+        _                    => TYaziX,
+    };
+
+    // Statik frozen brush'lar — her property erişiminde yeni nesne yaratmaz
+    private static readonly Brush TArkaX = Fırça(0x1E, 0x1E, 0x2E);
+    private static readonly Brush TArkaC = Fırça(0x4A, 0x3B, 0x1A);
+    private static readonly Brush TArkaB = Fırça(0x26, 0x4A, 0x2E);
+    private static readonly Brush TArkaH = Fırça(0x4A, 0x1F, 0x1F);
+    private static readonly Brush TYaziX = Fırça(0x6C, 0x70, 0x86);
+    private static readonly Brush TYaziC = Fırça(0xF9, 0xE2, 0xAF);
+    private static readonly Brush TYaziB = Fırça(0xA6, 0xE3, 0xA1);
+    private static readonly Brush TYaziH = Fırça(0xF3, 0x8B, 0xA8);
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
     public CihazSatiri(string pid, string service, string name, string instancePath)
     {
