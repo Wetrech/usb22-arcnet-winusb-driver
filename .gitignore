@@ -13,3 +13,5 @@ driver/*.cat
 gui/bin/
 gui/obj/
 *.pcapng
+build_log.bat
+build_output.txt

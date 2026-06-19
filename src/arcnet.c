@@ -115,6 +115,7 @@ const char *arc_result_str(arc_result_t r)
     case ARC_NO_PACKET:   return "ARC_NO_PACKET";
     case ARC_NOT_ACKED:       return "ARC_NOT_ACKED";
     case ARC_ERR_DEVICE_GONE: return "ARC_ERR_DEVICE_GONE";
+    case ARC_ERR_NET_BUSY:    return "ARC_ERR_NET_BUSY (network busy / transmitter not available, transient)";
     case ARC_ERR_OPEN:    return "ARC_ERR_OPEN";
     case ARC_ERR_IO:      return "ARC_ERR_IO";
     case ARC_ERR_TIMEOUT: return "ARC_ERR_TIMEOUT";
@@ -668,6 +669,12 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
             ctx->device_gone = true;
             VLOG_ERR(ctx, "arc_transmit: device gone GLE=%lu\n", err);
             return ARC_ERR_DEVICE_GONE;
+        }
+        if (err == ERROR_SEM_TIMEOUT) {
+            /* ARCNET RECON or transmitter not yet available — transient, not a hw error */
+            VLOG(ctx, "arc_transmit: WritePipe EP0x02 timeout (GLE=121) -> NET_BUSY\n");
+            pipe_flush(ctx, ARC_EP_TX_OUT);
+            return ARC_ERR_NET_BUSY;
         }
         VLOG_ERR(ctx, "arc_transmit: WritePipe EP0x02 failed: %lu\n", err);
         pipe_flush(ctx, ARC_EP_TX_OUT);

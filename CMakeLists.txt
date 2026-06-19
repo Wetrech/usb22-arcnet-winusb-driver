@@ -50,6 +50,12 @@ add_executable(test_recovery src/test_recovery.c)
 target_link_libraries(test_recovery arcnet)
 
 # ---------------------------------------------------------
+# test_multi_recovery: two-device isolation + reconnect
+# ---------------------------------------------------------
+add_executable(test_multi_recovery src/test_multi_recovery.c)
+target_link_libraries(test_multi_recovery arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -57,7 +63,8 @@ if(MSVC)
     target_compile_options(test_arcnet  PRIVATE /W3)
     target_compile_options(test_multi   PRIVATE /W3)
     target_compile_options(test_ack      PRIVATE /W3)
-    target_compile_options(test_recovery PRIVATE /W3)
+    target_compile_options(test_recovery       PRIVATE /W3)
+    target_compile_options(test_multi_recovery PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

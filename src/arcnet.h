@@ -66,6 +66,7 @@ typedef enum {
     ARC_ERR_PARAM       = -4,  /* Invalid argument                                     */
     ARC_ERR_ECHO        = -5,  /* Response echo mismatch                               */
     ARC_ERR_DEVICE_GONE = -6,  /* Device physically removed; call arc_reopen() + init  */
+    ARC_ERR_NET_BUSY    = -7,  /* ARCNET RECON / transmitter not available (transient)  */
 } arc_result_t;
 
 /* -----------------------------------------------------------------------
