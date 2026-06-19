@@ -44,13 +44,20 @@ add_executable(test_ack src/test_ack.c)
 target_link_libraries(test_ack arcnet)
 
 # ---------------------------------------------------------
+# test_recovery: device unplug / error recovery diagnostic
+# ---------------------------------------------------------
+add_executable(test_recovery src/test_recovery.c)
+target_link_libraries(test_recovery arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
     target_compile_options(arcnet       PRIVATE /W3)
     target_compile_options(test_arcnet  PRIVATE /W3)
     target_compile_options(test_multi   PRIVATE /W3)
-    target_compile_options(test_ack     PRIVATE /W3)
+    target_compile_options(test_ack      PRIVATE /W3)
+    target_compile_options(test_recovery PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

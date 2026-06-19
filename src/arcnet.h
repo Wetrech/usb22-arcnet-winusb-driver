@@ -59,12 +59,13 @@
 typedef enum {
     ARC_OK           =  0,  /* Success (and ACK received if waitAck=true)  */
     ARC_NO_PACKET    =  1,  /* arc_receive: channel empty, try again       */
-    ARC_NOT_ACKED    =  2,  /* arc_transmit: sent but no ACK within budget */
-    ARC_ERR_OPEN     = -1,  /* Device not found or CreateFile failed       */
-    ARC_ERR_IO       = -2,  /* USB read/write failure                      */
-    ARC_ERR_TIMEOUT  = -3,  /* Response budget exhausted                   */
-    ARC_ERR_PARAM    = -4,  /* Invalid argument                            */
-    ARC_ERR_ECHO     = -5,  /* Response echo mismatch                      */
+    ARC_NOT_ACKED       =  2,  /* arc_transmit: sent but no ACK within budget          */
+    ARC_ERR_OPEN        = -1,  /* Device not found or CreateFile failed                */
+    ARC_ERR_IO          = -2,  /* USB read/write failure (transient)                   */
+    ARC_ERR_TIMEOUT     = -3,  /* Response budget exhausted                            */
+    ARC_ERR_PARAM       = -4,  /* Invalid argument                                     */
+    ARC_ERR_ECHO        = -5,  /* Response echo mismatch                               */
+    ARC_ERR_DEVICE_GONE = -6,  /* Device physically removed; call arc_reopen() + init  */
 } arc_result_t;
 
 /* -----------------------------------------------------------------------
@@ -153,6 +154,18 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
  *           ARC_ERR_IO    USB error. */
 arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
                              uint32_t timeout_ms, int *out_len);
+
+/* Attempt to reopen a context whose device has been physically removed.
+ *
+ *   Closes any dead handles, clears the device_gone flag, and tries to
+ *   re-establish the WinUSB session using the same device path that was
+ *   used by arc_open().  If the device is still absent, returns
+ *   ARC_ERR_DEVICE_GONE (safe to call again later).
+ *
+ *   On ARC_OK the handles are valid but the ARCNET node is not yet
+ *   initialized — the caller MUST call arc_init() before transmitting
+ *   or receiving. */
+arc_result_t arc_reopen(arc_ctx_t *ctx);
 
 /* Close device, release all resources, and free the context.
  * Safe to call with NULL. After this call the pointer is invalid. */
