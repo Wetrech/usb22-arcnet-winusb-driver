@@ -278,3 +278,29 @@ Notes for production:
   per-port (one USB port bound to WinUSB, another left on the CC driver).
 - ARCNET node IDs must be unique on the bus; mismatched/duplicate node IDs cause init to
   report a non-0x22 status (e.g. 0xFB) and the network not to settle.
+
+---
+
+# UPDATE 8 — ACK detection (transmit delivery confirmation)
+
+ARCNET hardware ACK is reported in the COM20022 STATUS register (register 0), bit 1 = TMA
+("Transmit Message Acknowledged"). Read register 0 right AFTER arc_transmit:
+
+| Scenario (node1 -> node2, "ACKTEST1") | Reg[0] after TX | bit1 (TMA) | Meaning |
+|---------------------------------------|-----------------|-----------|---------|
+| receiver ALIVE (node2 open+init, bus wired) | 0x27 = 0010 0111 | 1 | delivered / ACKed |
+| receiver DEAD (node2 absent)                | 0x00 = 0000 0000 | 0 | not ACKed |
+
+Reg[0] bit layout observed: bit0=TA (Transmitter Available), bit1=TMA (ACK), bit2=EST,
+bit3=RI/recon-ish, bit5=POR. The reliable delivery indicator is **bit1 (TMA = 0x02)**.
+
+Secondary signal: when receiver is DEAD, the device also emits a `20 00 00 00 04 00`
+event on EP0x81 (RECON/no-token); when ALIVE, no such event. The register bit is the
+cleaner check.
+
+## Implementation
+After arc_transmit succeeds (bytes written to EP0x02), read register 0 (arc_register read
+reg 0). If (reg0 & 0x02) -> delivered (ARC_OK / ARC_ACKED); else -> not delivered
+(ARC_NOT_ACKED). Note: there may be a short delay before TMA settles; read reg0 a few ms
+after the write, and optionally poll reg0 a few times (e.g. up to ~50-100 ms) for the
+TMA bit before concluding NOT_ACKED.

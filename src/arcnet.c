@@ -80,6 +80,7 @@ const char *arc_result_str(arc_result_t r)
     switch (r) {
     case ARC_OK:          return "ARC_OK";
     case ARC_NO_PACKET:   return "ARC_NO_PACKET";
+    case ARC_NOT_ACKED:   return "ARC_NOT_ACKED";
     case ARC_ERR_OPEN:    return "ARC_ERR_OPEN";
     case ARC_ERR_IO:      return "ARC_ERR_IO";
     case ARC_ERR_TIMEOUT: return "ARC_ERR_TIMEOUT";
@@ -492,13 +493,15 @@ arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *val
  * arc_transmit
  * ===================================================================== */
 arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
-                          const uint8_t *data, int len)
+                          const uint8_t *data, int len, bool waitAck)
 {
-    BYTE  buf[254];
-    ULONG xferred;
-    ULONG tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
-    DWORD err;
-    int   i;
+    BYTE      buf[254];
+    ULONG     xferred;
+    ULONG     tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
+    DWORD     err;
+    int       i;
+    ULONGLONG ack_start;
+    uint8_t   reg0;
 
     if (!ctx) return ARC_ERR_OPEN;
     if (!data || len < 1 || len > 252) {
@@ -542,9 +545,70 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         VLOG_ERR(ctx, "arc_transmit: short write %lu/%d\n", xferred, len + 2);
         return ARC_ERR_IO;
     }
+    VLOG(ctx, "arc_transmit: sent %lu bytes to EP0x02\n", xferred);
 
-    VLOG(ctx, "arc_transmit: OK (%lu bytes to EP0x02)\n", xferred);
-    return ARC_OK;
+    if (!waitAck) {
+        VLOG(ctx, "arc_transmit: waitAck=false, returning ARC_OK without ACK check\n");
+        return ARC_OK;
+    }
+
+    /*
+     * ACK detection: COM20022 status register 0, bit 1 = TMA
+     * (Transmit Message Acknowledged — UPDATE 8).
+     * Poll for up to ARC_ACK_POLL_BUDGET_MS; return ARC_OK on first
+     * read where (reg0 & 0x02) is set, ARC_NOT_ACKED if budget expires.
+     */
+    ack_start = GetTickCount64();
+    while ((GetTickCount64() - ack_start) < ARC_ACK_POLL_BUDGET_MS) {
+        reg0 = 0;
+        if (arc_register(ctx, false, 0, &reg0) == ARC_OK) {
+            VLOG(ctx, "arc_transmit: ACK poll reg0=0x%02X TMA=%d (+%lu ms)\n",
+                 reg0, (reg0 >> 1) & 1,
+                 (ULONG)(GetTickCount64() - ack_start));
+            if (reg0 & 0x02) {
+                VLOG(ctx, "arc_transmit: ACK received (TMA set) -> ARC_OK\n");
+                return ARC_OK;
+            }
+        }
+        Sleep(ARC_ACK_POLL_INTERVAL_MS);
+    }
+
+    VLOG(ctx, "arc_transmit: TMA never set in %u ms -> ARC_NOT_ACKED\n",
+         ARC_ACK_POLL_BUDGET_MS);
+    return ARC_NOT_ACKED;
+}
+
+/* =======================================================================
+ * arc_read_event
+ *   Passive read from EP_EVT_IN (0x81) — no command sent first.
+ *   Used to capture unsolicited post-transmit status/event packets.
+ * ===================================================================== */
+arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
+                             uint32_t timeout_ms, int *out_len)
+{
+    ULONG xferred = 0;
+    ULONG to      = (ULONG)timeout_ms;
+    DWORD err;
+
+    if (!ctx || !buf || bufsize <= 0 || !out_len) return ARC_ERR_PARAM;
+    *out_len = 0;
+
+    if (timeout_ms > 0) {
+        if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
+                                   PIPE_TRANSFER_TIMEOUT, sizeof(to), &to))
+            VLOG_ERR(ctx, "arc_read_event: SetPipePolicy err=%lu\n", GetLastError());
+    }
+
+    if (!WinUsb_ReadPipe(ctx->usb_handle, ARC_EP_EVT_IN,
+                          (PUCHAR)buf, (ULONG)bufsize, &xferred, NULL)) {
+        err = GetLastError();
+        if (err == ERROR_SEM_TIMEOUT) return ARC_NO_PACKET;
+        VLOG_ERR(ctx, "arc_read_event: ReadPipe EP0x81 err=%lu\n", err);
+        return ARC_ERR_IO;
+    }
+
+    *out_len = (int)xferred;
+    return (xferred > 0) ? ARC_OK : ARC_NO_PACKET;
 }
 
 /* =======================================================================

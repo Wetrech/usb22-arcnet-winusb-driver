@@ -138,7 +138,7 @@ int main(int argc, char *argv[])
     printf("--- arc_transmit -> node %u ---\n", TEST_DEST_NODE);
     r = arc_transmit(ctx, TEST_DEST_NODE,
                      (const uint8_t *)TEST_PAYLOAD,
-                     (int)strlen(TEST_PAYLOAD));
+                     (int)strlen(TEST_PAYLOAD), /*waitAck=*/true);
     printf("arc_transmit: %s\n\n", arc_result_str(r));
 
     /* ------------------------------------------------------------------ */

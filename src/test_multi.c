@@ -159,7 +159,7 @@ int main(void)
     /* ------------------------------------------------------------------ */
     printf("-----------------------------------------------------\n");
     printf("[tx  0->1] node1 transmitting \"MULTI001\" to node2...\n");
-    r = arc_transmit(ctx[0], 2, (const uint8_t *)"MULTI001", 8);
+    r = arc_transmit(ctx[0], 2, (const uint8_t *)"MULTI001", 8, /*waitAck=*/true);
     tx01_ok = (r == ARC_OK);
     printf("[tx  0->1] arc_transmit: %s\n\n", arc_result_str(r));
 
@@ -170,7 +170,7 @@ int main(void)
     /* ------------------------------------------------------------------ */
     printf("-----------------------------------------------------\n");
     printf("[tx  1->0] node2 transmitting \"MULTI002\" to node1...\n");
-    r = arc_transmit(ctx[1], 1, (const uint8_t *)"MULTI002", 8);
+    r = arc_transmit(ctx[1], 1, (const uint8_t *)"MULTI002", 8, /*waitAck=*/true);
     tx10_ok = (r == ARC_OK);
     printf("[tx  1->0] arc_transmit: %s\n\n", arc_result_str(r));
 

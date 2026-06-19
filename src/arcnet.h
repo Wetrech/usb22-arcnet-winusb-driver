@@ -49,14 +49,17 @@
 #define ARC_BUDGET_SHORT_MS     1500u   /* Response budget: cmd04 / register        */
 #define ARC_BUDGET_INIT_MS      5000u   /* Response budget: init (~2.5 s on device) */
 #define ARC_RECEIVE_TIMEOUT_MS  150u    /* EP 0x86 / EP 0x02 timeout per arc_receive() poll  */
-#define ARC_TRANSMIT_TIMEOUT_MS 2000u   /* EP 0x02 timeout for real arc_transmit()           */
+#define ARC_TRANSMIT_TIMEOUT_MS  2000u  /* EP 0x02 timeout for real arc_transmit()           */
+#define ARC_ACK_POLL_BUDGET_MS    100u  /* How long to poll reg0 for TMA bit after transmit  */
+#define ARC_ACK_POLL_INTERVAL_MS   10u  /* Sleep between reg0 reads in ACK poll loop         */
 
 /* -----------------------------------------------------------------------
  * Result codes
  * --------------------------------------------------------------------- */
 typedef enum {
-    ARC_OK           =  0,  /* Success                                     */
+    ARC_OK           =  0,  /* Success (and ACK received if waitAck=true)  */
     ARC_NO_PACKET    =  1,  /* arc_receive: channel empty, try again       */
+    ARC_NOT_ACKED    =  2,  /* arc_transmit: sent but no ACK within budget */
     ARC_ERR_OPEN     = -1,  /* Device not found or CreateFile failed       */
     ARC_ERR_IO       = -2,  /* USB read/write failure                      */
     ARC_ERR_TIMEOUT  = -3,  /* Response budget exhausted                   */
@@ -120,9 +123,17 @@ arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *val
  *   destNode : destination ARCNET address
  *   data     : payload bytes (must not be NULL)
  *   len      : payload length, 1..252
- *   Returns ARC_OK on success. */
+ *   waitAck  : if true, polls COM20022 status reg 0 bit 1 (TMA) for up to
+ *              ARC_ACK_POLL_BUDGET_MS after sending; returns ARC_OK if the
+ *              bit is set (packet acknowledged) or ARC_NOT_ACKED if the
+ *              budget expires without seeing it.
+ *              if false, returns ARC_OK as soon as the USB write succeeds
+ *              (higher throughput, no delivery confirmation).
+ *   Returns ARC_OK        packet sent (and ACKed when waitAck=true).
+ *           ARC_NOT_ACKED packet sent but no ACK within budget.
+ *           ARC_ERR_IO    USB write failed. */
 arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
-                          const uint8_t *data, int len);
+                          const uint8_t *data, int len, bool waitAck);
 
 /* Poll for a received ARCNET packet (non-blocking within ARC_RECEIVE_TIMEOUT_MS).
  *   ARC_OK        : packet received; *src/*dst/*data/*len are valid.
@@ -131,6 +142,17 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
  * data[] must be at least 253 bytes. */
 arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
                          uint8_t *data, int *len);
+
+/* Read a raw event/status packet from EP 0x81 (unsolicited device -> host).
+ *   timeout_ms : pipe timeout; if 0 the current policy is kept.
+ *   buf        : caller buffer (>= ARC_EP_EVT_MAXPACKET bytes recommended).
+ *   bufsize    : capacity of buf.
+ *   out_len    : bytes received (valid only on ARC_OK).
+ *   Returns ARC_OK        packet received.
+ *           ARC_NO_PACKET timeout, no data.
+ *           ARC_ERR_IO    USB error. */
+arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
+                             uint32_t timeout_ms, int *out_len);
 
 /* Close device, release all resources, and free the context.
  * Safe to call with NULL. After this call the pointer is invalid. */
