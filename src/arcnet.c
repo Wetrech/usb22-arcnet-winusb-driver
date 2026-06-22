@@ -8,7 +8,15 @@
  *   arc_init()  ->  cmd04 -> handshake -> COM20020 config (~2.5 s)
  *
  * Multiple devices are supported: each arc_open() allocates an independent
- * arc_ctx_t on the heap. There is no global state.
+ * arc_ctx_t on the heap.  There is no global state.
+ *
+ * Thread safety: each context carries its own CRITICAL_SECTION.
+ *   - Concurrent calls on DIFFERENT contexts are fully parallel (no shared lock).
+ *   - Concurrent calls on the SAME context serialize: the second caller waits.
+ *   - CRITICAL_SECTION is recursive on Windows, so internal calls
+ *     (e.g. arc_transmit -> arc_register for ACK polling) never deadlock.
+ *   - arc_close() must not be called while another thread may still be inside
+ *     any API function on the same context (no reference counting).
  */
 
 #include "arcnet.h"
@@ -26,10 +34,11 @@
  * Per-device context (opaque to callers; defined here only)
  * --------------------------------------------------------------------- */
 struct arc_ctx_s {
+    CRITICAL_SECTION        lock;         /* per-context recursive mutex  */
     HANDLE                  dev_handle;
     WINUSB_INTERFACE_HANDLE usb_handle;
     bool                    verbose;
-    bool                    device_gone;   /* set on fatal USB error; cleared by arc_reopen */
+    bool                    device_gone;  /* set on fatal USB error; cleared by arc_reopen */
     char                    device_path[256]; /* stored for arc_reopen */
 };
 
@@ -68,6 +77,8 @@ static bool is_gone_error(DWORD err)
  * a clean state for the next operation.  Both steps are logged.
  *   AbortPipe  -- cancels any in-flight IRP / USB transaction
  *   ResetPipe  -- sends CLEAR_FEATURE(ENDPOINT_HALT), resets data toggle
+ *
+ * Caller must hold ctx->lock.
  * --------------------------------------------------------------------- */
 static void pipe_flush(arc_ctx_t *ctx, UCHAR ep)
 {
@@ -111,17 +122,17 @@ static const GUID GUID_USB_DEVICE = {
 const char *arc_result_str(arc_result_t r)
 {
     switch (r) {
-    case ARC_OK:          return "ARC_OK";
-    case ARC_NO_PACKET:   return "ARC_NO_PACKET";
+    case ARC_OK:              return "ARC_OK";
+    case ARC_NO_PACKET:       return "ARC_NO_PACKET";
     case ARC_NOT_ACKED:       return "ARC_NOT_ACKED";
     case ARC_ERR_DEVICE_GONE: return "ARC_ERR_DEVICE_GONE";
     case ARC_ERR_NET_BUSY:    return "ARC_ERR_NET_BUSY (network busy / transmitter not available, transient)";
-    case ARC_ERR_OPEN:    return "ARC_ERR_OPEN";
-    case ARC_ERR_IO:      return "ARC_ERR_IO";
-    case ARC_ERR_TIMEOUT: return "ARC_ERR_TIMEOUT";
-    case ARC_ERR_PARAM:   return "ARC_ERR_PARAM";
-    case ARC_ERR_ECHO:    return "ARC_ERR_ECHO";
-    default:              return "(unknown)";
+    case ARC_ERR_OPEN:        return "ARC_ERR_OPEN";
+    case ARC_ERR_IO:          return "ARC_ERR_IO";
+    case ARC_ERR_TIMEOUT:     return "ARC_ERR_TIMEOUT";
+    case ARC_ERR_PARAM:       return "ARC_ERR_PARAM";
+    case ARC_ERR_ECHO:        return "ARC_ERR_ECHO";
+    default:                  return "(unknown)";
     }
 }
 
@@ -217,6 +228,7 @@ arc_ctx_t *arc_open(const char *devicePath, bool verbose)
 
     ctx = (arc_ctx_t *)calloc(1, sizeof(arc_ctx_t));
     if (!ctx) return NULL;
+    InitializeCriticalSection(&ctx->lock);
     ctx->verbose = verbose;
     strncpy(ctx->device_path, path, sizeof(ctx->device_path) - 1);
     ctx->device_path[sizeof(ctx->device_path) - 1] = '\0';
@@ -230,6 +242,7 @@ arc_ctx_t *arc_open(const char *devicePath, bool verbose)
 
     if (ctx->dev_handle == INVALID_HANDLE_VALUE) {
         VLOG_ERR(ctx, "arc_open: CreateFile failed: %lu\n", GetLastError());
+        DeleteCriticalSection(&ctx->lock);
         free(ctx);
         return NULL;
     }
@@ -237,6 +250,7 @@ arc_ctx_t *arc_open(const char *devicePath, bool verbose)
     if (!WinUsb_Initialize(ctx->dev_handle, &ctx->usb_handle)) {
         VLOG_ERR(ctx, "arc_open: WinUsb_Initialize failed: %lu\n", GetLastError());
         CloseHandle(ctx->dev_handle);
+        DeleteCriticalSection(&ctx->lock);
         free(ctx);
         return NULL;
     }
@@ -255,97 +269,33 @@ arc_ctx_t *arc_open(const char *devicePath, bool verbose)
  * ===================================================================== */
 void arc_set_verbose(arc_ctx_t *ctx, bool enable)
 {
-    if (ctx) ctx->verbose = enable;
-}
-
-/* =======================================================================
- * arc_reopen
- *   Closes dead handles, clears device_gone, and tries to re-establish
- *   the WinUSB session using the path stored by arc_open().
- *   Returns ARC_OK on success (caller must still call arc_init()).
- *   Returns ARC_ERR_DEVICE_GONE if the device is still absent.
- * ===================================================================== */
-arc_result_t arc_reopen(arc_ctx_t *ctx)
-{
-    ULONG timeout_ms = ARC_READ_TIMEOUT_MS;
-    DWORD err;
-
-    if (!ctx) return ARC_ERR_OPEN;
-
-    VLOG(ctx, "arc_reopen: closing dead handles\n");
-
-    /* Release existing (possibly dead) handles — ignore errors */
-    if (ctx->usb_handle) {
-        WinUsb_Free(ctx->usb_handle);
-        ctx->usb_handle = NULL;
-    }
-    if (ctx->dev_handle && ctx->dev_handle != INVALID_HANDLE_VALUE) {
-        CloseHandle(ctx->dev_handle);
-        ctx->dev_handle = NULL;
-    }
-    ctx->device_gone = false;
-
-    /* If no path was stored (shouldn't happen), try auto-detect */
-    if (ctx->device_path[0] == '\0') {
-        char found[1][256];
-        if (enum_device_paths(ARC_VID, ARC_PID, found, 1) == 0) {
-            VLOG(ctx, "arc_reopen: no device found (still absent)\n");
-            ctx->device_gone = true;
-            return ARC_ERR_DEVICE_GONE;
-        }
-        strncpy(ctx->device_path, found[0], sizeof(ctx->device_path) - 1);
-        ctx->device_path[sizeof(ctx->device_path) - 1] = '\0';
-    }
-
-    VLOG(ctx, "arc_reopen: trying %s\n", ctx->device_path);
-
-    ctx->dev_handle = CreateFileA(ctx->device_path,
-        GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
-
-    if (ctx->dev_handle == INVALID_HANDLE_VALUE) {
-        err = ctx->dev_handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-        VLOG(ctx, "arc_reopen: CreateFile failed GLE=%lu (device still absent)\n", err);
-        ctx->dev_handle  = NULL;
-        ctx->device_gone = true;
-        return ARC_ERR_DEVICE_GONE;
-    }
-
-    if (!WinUsb_Initialize(ctx->dev_handle, &ctx->usb_handle)) {
-        err = GetLastError();
-        VLOG_ERR(ctx, "arc_reopen: WinUsb_Initialize failed: %lu\n", err);
-        CloseHandle(ctx->dev_handle);
-        ctx->dev_handle  = NULL;
-        ctx->usb_handle  = NULL;
-        ctx->device_gone = true;
-        return ARC_ERR_DEVICE_GONE;
-    }
-
-    /* Restore EP0x81 timeout policy */
-    if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
-                               PIPE_TRANSFER_TIMEOUT,
-                               sizeof(timeout_ms), &timeout_ms))
-        VLOG_ERR(ctx, "arc_reopen: SetPipePolicy EP0x81 warning: %lu\n", GetLastError());
-
-    VLOG(ctx, "arc_reopen: OK — call arc_init() to reinitialize the node\n");
-    return ARC_OK;
+    if (!ctx) return;
+    EnterCriticalSection(&ctx->lock);
+    ctx->verbose = enable;
+    LeaveCriticalSection(&ctx->lock);
 }
 
 /* =======================================================================
  * arc_close
+ *   Waits for any in-progress operation to finish (via the lock), then
+ *   closes handles, releases the lock, deletes the CS, and frees memory.
+ *   Calling arc_close() while another thread is actively blocked inside
+ *   an API call on the same context is not supported.
  * ===================================================================== */
 void arc_close(arc_ctx_t *ctx)
 {
     if (!ctx) return;
+    EnterCriticalSection(&ctx->lock);
     if (ctx->usb_handle) { WinUsb_Free(ctx->usb_handle); ctx->usb_handle = NULL; }
     if (ctx->dev_handle) { CloseHandle(ctx->dev_handle);  ctx->dev_handle = NULL; }
     VLOG(ctx, "arc_close: done\n");
+    LeaveCriticalSection(&ctx->lock);
+    DeleteCriticalSection(&ctx->lock);
     free(ctx);
 }
 
 /* =======================================================================
- * write_cmd  --  internal
+ * write_cmd  --  internal; caller must hold ctx->lock.
  * ===================================================================== */
 static arc_result_t write_cmd(arc_ctx_t *ctx, const BYTE *cmd, ULONG len)
 {
@@ -371,7 +321,7 @@ static arc_result_t write_cmd(arc_ctx_t *ctx, const BYTE *cmd, ULONG len)
 }
 
 /* =======================================================================
- * read_response  --  internal
+ * read_response  --  internal; caller must hold ctx->lock.
  *   Reads from EP_EVT_IN (0x81) until a packet with byte[0]==expected
  *   arrives or the time budget expires.
  *   Per-read timeout = ARC_READ_TIMEOUT_MS; budget allows multiple reads.
@@ -422,7 +372,7 @@ static arc_result_t read_response(arc_ctx_t *ctx,
 }
 
 /* =======================================================================
- * cmd04_internal  --  session-start (UPDATE 4)
+ * cmd04_internal  --  session-start (UPDATE 4); caller must hold ctx->lock.
  * ===================================================================== */
 static arc_result_t cmd04_internal(arc_ctx_t *ctx)
 {
@@ -455,7 +405,7 @@ static arc_result_t cmd04_internal(arc_ctx_t *ctx)
 }
 
 /* =======================================================================
- * handshake_internal  --  data-channel probe (UPDATE 5)
+ * handshake_internal  --  data-channel probe (UPDATE 5); caller must hold ctx->lock.
  * ===================================================================== */
 static arc_result_t handshake_internal(arc_ctx_t *ctx)
 {
@@ -509,21 +459,23 @@ static arc_result_t handshake_internal(arc_ctx_t *ctx)
 arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
                       uint8_t clockPrescaler, bool recvBroadcasts)
 {
+    arc_result_t r;
     BYTE         cmd[12];
     BYTE         resp[ARC_EP_EVT_MAXPACKET];
     ULONG        xferred;
     ULONG        rx_timeout = ARC_RECEIVE_TIMEOUT_MS;
-    arc_result_t r;
     ULONG        i;
 
     if (!ctx) return ARC_ERR_OPEN;
-    if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
+    EnterCriticalSection(&ctx->lock);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     r = cmd04_internal(ctx);
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     r = handshake_internal(ctx);
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     /* COM20020 configuration command (12 bytes) — see protocol notes UPDATE 6 */
     cmd[0]  = ARC_OPCODE_INIT;
@@ -545,12 +497,12 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
     }
 
     r = write_cmd(ctx, cmd, sizeof(cmd));
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     memset(resp, 0, sizeof(resp));
     r = read_response(ctx, ARC_OPCODE_INIT, resp, sizeof(resp),
                       ARC_BUDGET_INIT_MS, &xferred);
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     if (ctx->verbose) {
         printf("[arcnet] arc_init: response (%lu bytes):", xferred);
@@ -567,7 +519,94 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
         VLOG_ERR(ctx, "arc_init: SetPipePolicy EP0x86 warning: %lu\n", GetLastError());
 
     VLOG(ctx, "arc_init: OK (nodeID=0x%02X)\n", nodeID);
-    return ARC_OK;
+    r = ARC_OK;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
+}
+
+/* =======================================================================
+ * arc_reopen
+ *   Closes dead handles, clears device_gone, and tries to re-establish
+ *   the WinUSB session using the path stored by arc_open().
+ *   Returns ARC_OK on success (caller must still call arc_init()).
+ *   Returns ARC_ERR_DEVICE_GONE if the device is still absent.
+ * ===================================================================== */
+arc_result_t arc_reopen(arc_ctx_t *ctx)
+{
+    arc_result_t r;
+    ULONG        timeout_ms = ARC_READ_TIMEOUT_MS;
+    DWORD        err;
+
+    if (!ctx) return ARC_ERR_OPEN;
+    EnterCriticalSection(&ctx->lock);
+
+    VLOG(ctx, "arc_reopen: closing dead handles\n");
+
+    /* Release existing (possibly dead) handles — ignore errors */
+    if (ctx->usb_handle) {
+        WinUsb_Free(ctx->usb_handle);
+        ctx->usb_handle = NULL;
+    }
+    if (ctx->dev_handle && ctx->dev_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(ctx->dev_handle);
+        ctx->dev_handle = NULL;
+    }
+    ctx->device_gone = false;
+
+    /* If no path was stored (shouldn't happen), try auto-detect */
+    if (ctx->device_path[0] == '\0') {
+        char found[1][256];
+        if (enum_device_paths(ARC_VID, ARC_PID, found, 1) == 0) {
+            VLOG(ctx, "arc_reopen: no device found (still absent)\n");
+            ctx->device_gone = true;
+            r = ARC_ERR_DEVICE_GONE;
+            goto done;
+        }
+        strncpy(ctx->device_path, found[0], sizeof(ctx->device_path) - 1);
+        ctx->device_path[sizeof(ctx->device_path) - 1] = '\0';
+    }
+
+    VLOG(ctx, "arc_reopen: trying %s\n", ctx->device_path);
+
+    ctx->dev_handle = CreateFileA(ctx->device_path,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+
+    if (ctx->dev_handle == INVALID_HANDLE_VALUE) {
+        err = GetLastError();
+        VLOG(ctx, "arc_reopen: CreateFile failed GLE=%lu (device still absent)\n", err);
+        ctx->dev_handle  = NULL;
+        ctx->device_gone = true;
+        r = ARC_ERR_DEVICE_GONE;
+        goto done;
+    }
+
+    if (!WinUsb_Initialize(ctx->dev_handle, &ctx->usb_handle)) {
+        err = GetLastError();
+        VLOG_ERR(ctx, "arc_reopen: WinUsb_Initialize failed: %lu\n", err);
+        CloseHandle(ctx->dev_handle);
+        ctx->dev_handle  = NULL;
+        ctx->usb_handle  = NULL;
+        ctx->device_gone = true;
+        r = ARC_ERR_DEVICE_GONE;
+        goto done;
+    }
+
+    /* Restore EP0x81 timeout policy */
+    if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
+                               PIPE_TRANSFER_TIMEOUT,
+                               sizeof(timeout_ms), &timeout_ms))
+        VLOG_ERR(ctx, "arc_reopen: SetPipePolicy EP0x81 warning: %lu\n", GetLastError());
+
+    VLOG(ctx, "arc_reopen: OK — call arc_init() to reinitialize the node\n");
+    r = ARC_OK;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
 }
 
 /* =======================================================================
@@ -575,14 +614,16 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
  * ===================================================================== */
 arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *value)
 {
+    arc_result_t r;
     BYTE         cmd[5];
     BYTE         resp[ARC_EP_EVT_MAXPACKET];
     ULONG        xferred;
-    arc_result_t r;
 
-    if (!ctx)             return ARC_ERR_OPEN;
-    if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
-    if (!value)           return ARC_ERR_PARAM;
+    if (!ctx)   return ARC_ERR_OPEN;
+    if (!value) return ARC_ERR_PARAM;
+    EnterCriticalSection(&ctx->lock);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     cmd[0] = ARC_OPCODE_REGISTER;
     cmd[1] = 0x00;
@@ -591,52 +632,65 @@ arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *val
     cmd[4] = bWrite ? *value : 0x00u;
 
     r = write_cmd(ctx, cmd, sizeof(cmd));
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     memset(resp, 0, sizeof(resp));
     r = read_response(ctx, ARC_OPCODE_REGISTER, resp, sizeof(resp),
                       ARC_BUDGET_SHORT_MS, &xferred);
-    if (r != ARC_OK) return r;
+    if (r != ARC_OK) goto done;
 
     if (xferred < 7) {
         VLOG_ERR(ctx, "arc_register: response too short: %lu bytes\n", xferred);
-        return ARC_ERR_IO;
+        r = ARC_ERR_IO;
+        goto done;
     }
 
     if (resp[4] != cmd[2] || resp[5] != reg) {
         VLOG_ERR(ctx, "arc_register: echo mismatch "
                  "(bWrite_echo=0x%02X reg_echo=0x%02X, sent 0x%02X 0x%02X)\n",
                  resp[4], resp[5], cmd[2], reg);
-        return ARC_ERR_ECHO;
+        r = ARC_ERR_ECHO;
+        goto done;
     }
 
     if (!bWrite)
         *value = resp[6];
 
-    return ARC_OK;
+    r = ARC_OK;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
 }
 
 /* =======================================================================
  * arc_transmit
+ *
+ * The ACK poll loop calls arc_register(), which re-enters ctx->lock.
+ * This is safe because Windows CRITICAL_SECTION is recursive: the same
+ * thread can Enter multiple times and must Leave an equal number of times.
  * ===================================================================== */
 arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                           const uint8_t *data, int len, bool waitAck)
 {
-    BYTE      buf[254];
-    ULONG     xferred;
-    ULONG     tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
-    DWORD     err;
-    int       i;
-    ULONGLONG ack_start;
-    uint8_t   reg0;
+    arc_result_t r;
+    BYTE         buf[254];
+    ULONG        xferred;
+    ULONG        tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
+    DWORD        err;
+    int          i;
+    ULONGLONG    ack_start;
+    uint8_t      reg0;
 
-    if (!ctx)             return ARC_ERR_OPEN;
-    if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
+    if (!ctx) return ARC_ERR_OPEN;
     if (!data || len < 1 || len > 252) {
         VLOG_ERR(ctx, "arc_transmit: invalid argument (data=%p len=%d)\n",
                  (void *)data, len);
         return ARC_ERR_PARAM;
     }
+    EnterCriticalSection(&ctx->lock);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     /*
      * arc_receive leaves EP_TX_OUT with a 150 ms PIPE_TRANSFER_TIMEOUT and may
@@ -645,6 +699,8 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
      */
     VLOG(ctx, "arc_transmit: flushing EP0x02 before transmit\n");
     pipe_flush(ctx, ARC_EP_TX_OUT);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
                                PIPE_TRANSFER_TIMEOUT,
@@ -668,27 +724,32 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             VLOG_ERR(ctx, "arc_transmit: device gone GLE=%lu\n", err);
-            return ARC_ERR_DEVICE_GONE;
+            r = ARC_ERR_DEVICE_GONE;
+            goto done;
         }
         if (err == ERROR_SEM_TIMEOUT) {
             /* ARCNET RECON or transmitter not yet available — transient, not a hw error */
             VLOG(ctx, "arc_transmit: WritePipe EP0x02 timeout (GLE=121) -> NET_BUSY\n");
             pipe_flush(ctx, ARC_EP_TX_OUT);
-            return ARC_ERR_NET_BUSY;
+            r = ARC_ERR_NET_BUSY;
+            goto done;
         }
         VLOG_ERR(ctx, "arc_transmit: WritePipe EP0x02 failed: %lu\n", err);
         pipe_flush(ctx, ARC_EP_TX_OUT);
-        return ARC_ERR_IO;
+        r = ARC_ERR_IO;
+        goto done;
     }
     if (xferred != (ULONG)(len + 2)) {
         VLOG_ERR(ctx, "arc_transmit: short write %lu/%d\n", xferred, len + 2);
-        return ARC_ERR_IO;
+        r = ARC_ERR_IO;
+        goto done;
     }
     VLOG(ctx, "arc_transmit: sent %lu bytes to EP0x02\n", xferred);
 
     if (!waitAck) {
         VLOG(ctx, "arc_transmit: waitAck=false, returning ARC_OK without ACK check\n");
-        return ARC_OK;
+        r = ARC_OK;
+        goto done;
     }
 
     /*
@@ -706,7 +767,8 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                  (ULONG)(GetTickCount64() - ack_start));
             if (reg0 & 0x02) {
                 VLOG(ctx, "arc_transmit: ACK received (TMA set) -> ARC_OK\n");
-                return ARC_OK;
+                r = ARC_OK;
+                goto done;
             }
         }
         Sleep(ARC_ACK_POLL_INTERVAL_MS);
@@ -714,7 +776,11 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
 
     VLOG(ctx, "arc_transmit: TMA never set in %u ms -> ARC_NOT_ACKED\n",
          ARC_ACK_POLL_BUDGET_MS);
-    return ARC_NOT_ACKED;
+    r = ARC_NOT_ACKED;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
 }
 
 /* =======================================================================
@@ -725,12 +791,15 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
 arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
                              uint32_t timeout_ms, int *out_len)
 {
-    ULONG xferred = 0;
-    ULONG to      = (ULONG)timeout_ms;
-    DWORD err;
+    arc_result_t r;
+    ULONG        xferred = 0;
+    ULONG        to      = (ULONG)timeout_ms;
+    DWORD        err;
 
     if (!ctx || !buf || bufsize <= 0 || !out_len) return ARC_ERR_PARAM;
-    if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
+    EnterCriticalSection(&ctx->lock);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
     *out_len = 0;
 
     if (timeout_ms > 0) {
@@ -742,18 +811,24 @@ arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
     if (!WinUsb_ReadPipe(ctx->usb_handle, ARC_EP_EVT_IN,
                           (PUCHAR)buf, (ULONG)bufsize, &xferred, NULL)) {
         err = GetLastError();
-        if (err == ERROR_SEM_TIMEOUT) return ARC_NO_PACKET;
+        if (err == ERROR_SEM_TIMEOUT) { r = ARC_NO_PACKET; goto done; }
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             VLOG_ERR(ctx, "arc_read_event: device gone GLE=%lu\n", err);
-            return ARC_ERR_DEVICE_GONE;
+            r = ARC_ERR_DEVICE_GONE;
+            goto done;
         }
         VLOG_ERR(ctx, "arc_read_event: ReadPipe EP0x81 err=%lu\n", err);
-        return ARC_ERR_IO;
+        r = ARC_ERR_IO;
+        goto done;
     }
 
     *out_len = (int)xferred;
-    return (xferred > 0) ? ARC_OK : ARC_NO_PACKET;
+    r = (xferred > 0) ? ARC_OK : ARC_NO_PACKET;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
 }
 
 /* =======================================================================
@@ -773,17 +848,20 @@ arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
 arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
                          uint8_t *data, int *len)
 {
-    BYTE  poll[10];
-    BYTE  buf[RX_BUF_SIZE];
-    ULONG xferred;
-    ULONG pipe_to = ARC_RECEIVE_TIMEOUT_MS;
-    DWORD err;
-    BOOL  ok;
-    int   L;
+    arc_result_t r;
+    BYTE         poll[10];
+    BYTE         buf[RX_BUF_SIZE];
+    ULONG        xferred;
+    ULONG        pipe_to = ARC_RECEIVE_TIMEOUT_MS;
+    DWORD        err;
+    BOOL         ok;
+    int          L;
 
     if (!ctx)                          return ARC_ERR_OPEN;
-    if (ctx->device_gone)              return ARC_ERR_DEVICE_GONE;
     if (!src || !dst || !data || !len) return ARC_ERR_PARAM;
+    EnterCriticalSection(&ctx->lock);
+
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     /* ------------------------------------------------------------------ */
     /* Apply short timeouts so neither write nor read can block            */
@@ -808,11 +886,13 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             VLOG_ERR(ctx, "arc_receive: device gone on WritePipe EP0x02 GLE=%lu\n", err);
-            return ARC_ERR_DEVICE_GONE;
+            r = ARC_ERR_DEVICE_GONE;
+            goto done;
         }
         VLOG(ctx, "arc_receive: WritePipe EP0x02 err=%lu -> flush+ARC_NO_PACKET\n", err);
         pipe_flush(ctx, ARC_EP_TX_OUT);
-        return ARC_NO_PACKET;
+        r = ARC_NO_PACKET;
+        goto done;
     }
     VLOG(ctx, "arc_receive: poll wrote %lu bytes to EP0x02\n", xferred);
 
@@ -830,24 +910,29 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
         if (err == ERROR_SEM_TIMEOUT) {
             VLOG(ctx, "arc_receive: ReadPipe EP0x86 timeout (normal, no packet) -> flush\n");
             pipe_flush(ctx, ARC_EP_RX_IN);
-            return ARC_NO_PACKET;
+            r = ARC_NO_PACKET;
+            goto done;
         }
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             VLOG_ERR(ctx, "arc_receive: device gone on ReadPipe EP0x86 GLE=%lu\n", err);
-            return ARC_ERR_DEVICE_GONE;
+            r = ARC_ERR_DEVICE_GONE;
+            goto done;
         }
         VLOG_ERR(ctx, "arc_receive: ReadPipe EP0x86 err=%lu -> flush+ARC_ERR_IO\n", err);
         pipe_flush(ctx, ARC_EP_RX_IN);
-        return ARC_ERR_IO;
+        r = ARC_ERR_IO;
+        goto done;
     }
     VLOG(ctx, "arc_receive: read %lu bytes from EP0x86\n", xferred);
 
     /* ------------------------------------------------------------------ */
     /* 3. Empty-response check                                            */
     /* ------------------------------------------------------------------ */
-    if (xferred < 3 || (buf[0] == 0 && buf[1] == 0))
-        return ARC_NO_PACKET;
+    if (xferred < 3 || (buf[0] == 0 && buf[1] == 0)) {
+        r = ARC_NO_PACKET;
+        goto done;
+    }
 
     /* ------------------------------------------------------------------ */
     /* 4. Parse: [src][dst][count][data...]                               */
@@ -856,10 +941,16 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
     *dst = buf[1];
     L    = (256 - (int)buf[2]) & 0xFF;
 
-    if (L == 0 || (int)xferred < L + 3)
-        return ARC_NO_PACKET;
+    if (L == 0 || (int)xferred < L + 3) {
+        r = ARC_NO_PACKET;
+        goto done;
+    }
 
     *len = L;
     memcpy(data, buf + 3, (size_t)L);
-    return ARC_OK;
+    r = ARC_OK;
+
+done:
+    LeaveCriticalSection(&ctx->lock);
+    return r;
 }

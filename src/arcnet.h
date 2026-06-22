@@ -7,6 +7,11 @@
  *
  * Multiple devices can be open simultaneously: each arc_open() call
  * allocates an independent arc_ctx_t context.
+ *
+ * Thread safety: all API functions on the SAME context serialize via a
+ * per-context CRITICAL_SECTION.  Concurrent calls on DIFFERENT contexts
+ * are fully parallel.  Do not call arc_close() while another thread may
+ * still be inside any API function on the same context.
  */
 
 #ifndef ARCNET_H
