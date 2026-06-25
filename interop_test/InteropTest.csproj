@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- Reuse the interop types from the GUI project -->
+  <ItemGroup>
+    <ProjectReference Include="..\gui\WetrechArcnetManager.csproj" />
+  </ItemGroup>
+
+  <!-- Copy arcnet.dll next to the test exe at build time -->
+  <ItemGroup>
+    <None Include="..\build\arcnet.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

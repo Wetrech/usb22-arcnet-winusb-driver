@@ -13,6 +13,8 @@ reference/DI-SDK/
 driver/*.cat
 gui/bin/
 gui/obj/
+interop_test/bin/
+interop_test/obj/
 *.pcapng
 build_log.bat
 build_output.txt
