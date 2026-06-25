@@ -74,11 +74,12 @@ int main(int argc, char *argv[])
     int          hw_err    = 0;
     int          recv_timeout_sec = RECEIVE_LOOP_SEC;
     int          no_receive = 0;
+    int          verbose    = 0;           /* --verbose: ARC_LOG_DEBUG, else NONE */
     const char  *device_path_arg = NULL;   /* --device-path <WMI DeviceID> */
     const char  *dev_to_open;
     ULONGLONG    loop_start;
 
-    /* Parse --recv-timeout N | --no-receive | --quick | --device-path <id> */
+    /* Parse --recv-timeout N | --no-receive | --quick | --device-path <id> | --verbose */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--recv-timeout") == 0 && i + 1 < argc)
             recv_timeout_sec = atoi(argv[++i]);
@@ -86,6 +87,8 @@ int main(int argc, char *argv[])
             no_receive = 1;
         else if (strcmp(argv[i], "--device-path") == 0 && i + 1 < argc)
             device_path_arg = argv[++i];
+        else if (strcmp(argv[i], "--verbose") == 0)
+            verbose = 1;
     }
 
     printf("==============================================\n");
@@ -105,7 +108,9 @@ int main(int argc, char *argv[])
     if (dev_to_open)
         printf("  path: %s\n", dev_to_open);
 
-    ctx = arc_open(dev_to_open, /*verbose=*/true);
+    ctx = arc_open(dev_to_open, /*verbose=*/false);
+    if (ctx && verbose)
+        arc_set_log_level(ctx, ARC_LOG_DEBUG);
     printf("arc_open: %s\n\n", ctx ? "ARC_OK" : "ARC_ERR_OPEN");
     if (!ctx) return 1;
 

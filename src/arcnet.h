@@ -12,6 +12,9 @@
  * per-context CRITICAL_SECTION.  Concurrent calls on DIFFERENT contexts
  * are fully parallel.  Do not call arc_close() while another thread may
  * still be inside any API function on the same context.
+ *
+ * Logging: per-context, level-filtered, optionally redirected via callback.
+ * Default level is ARC_LOG_NONE (completely silent — production friendly).
  */
 
 #ifndef ARCNET_H
@@ -59,6 +62,22 @@
 #define ARC_ACK_POLL_INTERVAL_MS   10u  /* Sleep between reg0 reads in ACK poll loop         */
 
 /* -----------------------------------------------------------------------
+ * Log levels  (per-context; default ARC_LOG_NONE)
+ * --------------------------------------------------------------------- */
+typedef enum {
+    ARC_LOG_NONE  = 0,   /* completely silent                              */
+    ARC_LOG_ERROR = 1,   /* fatal errors only (device gone, IO fail, ...)  */
+    ARC_LOG_INFO  = 2,   /* notable events: open, init, reconnect, close   */
+    ARC_LOG_DEBUG = 3,   /* full protocol trace (current verbose behaviour)*/
+} arc_log_level_t;
+
+/* Log callback — set via arc_set_log_callback().
+ *   level : severity of this message
+ *   msg   : NUL-terminated, includes "[arcnet] " prefix and trailing '\n'
+ *   user  : opaque pointer passed to arc_set_log_callback()              */
+typedef void (*arc_log_fn)(arc_log_level_t level, const char *msg, void *user);
+
+/* -----------------------------------------------------------------------
  * Result codes
  * --------------------------------------------------------------------- */
 typedef enum {
@@ -102,7 +121,20 @@ int arc_list_devices(char paths[][256], int maxDevices);
  *   The returned context must be released with arc_close(). */
 arc_ctx_t *arc_open(const char *devicePath, bool verbose);
 
-/* Change the verbose setting of an open context. */
+/* Set the log level for an open context.
+ *   ARC_LOG_NONE  (0) — silent (default)
+ *   ARC_LOG_ERROR (1) — errors only
+ *   ARC_LOG_INFO  (2) — open / init / reconnect / close events + errors
+ *   ARC_LOG_DEBUG (3) — full protocol trace                              */
+void arc_set_log_level(arc_ctx_t *ctx, arc_log_level_t level);
+
+/* Set a log callback.  When fn is non-NULL all log output goes to fn
+ * instead of stderr.  Pass fn=NULL to restore the default (stderr).     */
+void arc_set_log_callback(arc_ctx_t *ctx, arc_log_fn fn, void *user);
+
+/* Backward-compatible verbose toggle:
+ *   enable=true  -> ARC_LOG_DEBUG
+ *   enable=false -> ARC_LOG_NONE                                         */
 void arc_set_verbose(arc_ctx_t *ctx, bool enable);
 
 /* Initialize the ARCNET node.
