@@ -94,13 +94,28 @@ public partial class MainWindow : Window
         string infPath = Path.Combine(driverDir, "usb22_winusb.inf");
         LogEkle("── Adım 2/2: Sürücü yükleme (pnputil)", BrMavi);
 
+        var pnpCikti = new List<string>();
         ok = await KomutCalistirAsync(
             "pnputil.exe",
             $"/add-driver \"{infPath}\" /install",
-            driverDir);
+            driverDir,
+            pnpCikti,
+            extraOkCodes: new[] { 259 });   // 259 = zaten güncel (ERROR_NO_MORE_ITEMS)
 
-        if (!ok) { LogEkle("✘  pnputil başarısız — sürücü yüklenemedi.", BrKirmizi); return false; }
-        LogEkle("✔  Adım 2 tamamlandı.", BrYesil);
+        if (!ok)
+        {
+            LogEkle("✘  pnputil başarısız — sürücü yüklenemedi.", BrKirmizi);
+            return false;
+        }
+
+        bool zatenGuncel = pnpCikti.Any(s =>
+            s.Contains("up-to-date",       StringComparison.OrdinalIgnoreCase) ||
+            s.Contains("Already exists",   StringComparison.OrdinalIgnoreCase) ||
+            s.Contains("added successfully", StringComparison.OrdinalIgnoreCase));
+
+        LogEkle(zatenGuncel
+            ? "✔  Sürücü zaten yüklü ve güncel."
+            : "✔  Adım 2 tamamlandı.", BrYesil);
         return true;
     }
 
@@ -304,7 +319,8 @@ public partial class MainWindow : Window
     private async Task<bool> KomutCalistirAsync(
         string exe, string args, string calismaDir,
         List<string>? ciktiTopla = null,
-        int timeoutMs = -1)
+        int timeoutMs = -1,
+        int[]? extraOkCodes = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -367,10 +383,10 @@ public partial class MainWindow : Window
                 await proc.WaitForExitAsync();
             }
 
-            if (proc.ExitCode != 0)
+            bool exitOk = proc.ExitCode == 0 || (extraOkCodes?.Contains(proc.ExitCode) ?? false);
+            if (!exitOk)
                 LogEkle($"  (çıkış kodu: {proc.ExitCode})", BrKirmizi);
-
-            return proc.ExitCode == 0;
+            return exitOk;
         }
         catch (Exception ex)
         {

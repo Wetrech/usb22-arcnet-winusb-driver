@@ -1,4 +1,4 @@
-# sign.ps1 — USB22-485 WinUSB surucusunu self-signed sertifika ile imzalar.
+﻿# sign.ps1 — USB22-485 WinUSB surucusunu self-signed sertifika ile imzalar.
 #
 # Gereksinim : PowerShell 5.1+, Yonetici yetkisi
 # Ekstra arac: YOK — tum islemler Windows yerlesik cmdlet'leri ile yapilir
@@ -89,9 +89,9 @@ Write-Host "[5/5] Katalog imzalaniyor..."
 $sig = Set-AuthenticodeSignature -FilePath $CatFile -Certificate $cert -HashAlgorithm SHA256
 
 if ($sig.Status -eq "Valid") {
-    Write-Host "    OK — imza gecerli"
+    Write-Host "    OK - imza gecerli"
 } else {
-    Write-Warning "    Imza durumu: $($sig.Status) — kurulum basarisiz olabilir"
+    Write-Warning "    Imza durumu: $($sig.Status) - kurulum basarisiz olabilir"
 }
 
 # ----------------------------------------------------------------
