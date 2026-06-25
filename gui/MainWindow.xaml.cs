@@ -1,10 +1,10 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -12,13 +12,11 @@ namespace WetrechArcnetManager;
 
 public partial class MainWindow : Window
 {
-    private readonly ObservableCollection<LogGirdi> _loglar = new();
     private bool _testCalisiyor;
 
     public MainWindow()
     {
         InitializeComponent();
-        LogKutu.ItemsSource = _loglar;
         Loaded += (_, _) => CihazlariTara();
     }
 
@@ -30,8 +28,8 @@ public partial class MainWindow : Window
     {
         string? driverDir = DriverKlasorunuBul();
 
-        LogPanel.Visibility = Visibility.Visible;
-        _loglar.Clear();
+        AcLogPanel();
+        LogKutu.Document.Blocks.Clear();
 
         if (driverDir == null)
         {
@@ -110,8 +108,8 @@ public partial class MainWindow : Window
 
     private async void TestBtn_Click(object sender, RoutedEventArgs e)
     {
-        LogPanel.Visibility = Visibility.Visible;
-        _loglar.Clear();
+        AcLogPanel();
+        LogKutu.Document.Blocks.Clear();
 
         var secili = CihazListesi.SelectedItem as CihazSatiri;
         if (secili == null)
@@ -144,8 +142,8 @@ public partial class MainWindow : Window
 
     private async void HepsiniTestBtn_Click(object sender, RoutedEventArgs e)
     {
-        LogPanel.Visibility = Visibility.Visible;
-        _loglar.Clear();
+        AcLogPanel();
+        LogKutu.Document.Blocks.Clear();
 
         var cihazlar = (CihazListesi.ItemsSource as IEnumerable<CihazSatiri>)?.ToList();
         if (cihazlar == null || cihazlar.Count == 0)
@@ -216,30 +214,59 @@ public partial class MainWindow : Window
 
     private bool TestSonucunuDegerlendir(IReadOnlyList<string> satirlar, bool exitOk)
     {
-        bool initOk     = satirlar.Any(s => s.Contains("arc_init: ARC_OK"));
-        bool transmitOk = satirlar.Any(s => s.Contains("arc_transmit: ARC_OK"));
-        bool hataVar    = satirlar.Any(s =>
-            s.Contains("ARC_ERR") || s.Contains("device not found") || s.Contains("hardware error"));
+        bool openOk    = satirlar.Any(s => s.Contains("arc_open: ARC_OK"));
+        bool initOk    = satirlar.Any(s => s.Contains("arc_init: ARC_OK"));
+        bool hardHata  = satirlar.Any(s =>
+            s.Contains("ARC_ERR_IO") || s.Contains("ARC_ERR_DEVICE_GONE") ||
+            s.Contains("device gone") || s.Contains("hardware error"));
 
         LogEkle("", BrGri);
         LogEkle("── Sonuç ──────────────────────────────────────", BrGri);
 
-        if (initOk && transmitOk)
+        // Gerçek donanım hatası her zaman başarısız sayılır
+        if (hardHata)
         {
-            LogEkle("✔  Cihaz çalışıyor (init + transmit OK)", BrYesil);
-            return true;
+            string satir = satirlar.FirstOrDefault(s =>
+                s.Contains("ARC_ERR_IO") || s.Contains("ARC_ERR_DEVICE_GONE") ||
+                s.Contains("device gone") || s.Contains("hardware error")) ?? "";
+            LogEkle($"✘  Cihaza erişilemedi / donanım hatası: {satir.Trim()}", BrKirmizi);
+            return false;
         }
-        else if (hataVar)
+
+        // Open veya init başarısız ise cihaza ulaşılamıyor
+        if (!openOk || !initOk)
         {
-            string ilkHata = satirlar.FirstOrDefault(s =>
-                s.Contains("ARC_ERR") || s.Contains("device not found")) ?? "";
-            LogEkle($"✘  Test başarısız: {ilkHata.Trim()}", BrKirmizi);
+            if (!openOk)
+                LogEkle("✘  arc_open başarısız — cihaz bulunamadı veya sürücü yüklü değil.", BrKirmizi);
+            else
+                LogEkle("✘  arc_init başarısız — cihaz açıldı ama başlatılamadı.", BrKirmizi);
+            return false;
+        }
+
+        // Open + init OK → cihaz çalışıyor. Transmit sonucu sadece bilgi amaçlı.
+        bool transmitAck    = satirlar.Any(s => s.Contains("arc_transmit: ARC_OK"));
+        bool transmitNotAck = satirlar.Any(s => s.Contains("ARC_NOT_ACKED"));
+        bool netBusy        = satirlar.Any(s => s.Contains("ARC_ERR_NET_BUSY"));
+
+        if (transmitAck)
+        {
+            LogEkle("✔  Cihaz çalışıyor (paket ACK'lendi)", BrYesil);
+        }
+        else if (transmitNotAck)
+        {
+            LogEkle("✔  Cihaz çalışıyor", BrYesil);
+            LogEkle("   (ağda paketi onaylayan aktif bir node yok — tek cihaz testinde normaldir)", BrSari);
+        }
+        else if (netBusy)
+        {
+            LogEkle("✔  Cihaz çalışıyor", BrYesil);
+            LogEkle("   (ağ geçici meşgul — RECON devam ediyor)", BrSari);
         }
         else
         {
-            LogEkle($"✘  Test başarısız: {(exitOk ? "init/transmit onaylanamadı" : "süreç hata ile çıktı")}", BrKirmizi);
+            LogEkle("✔  Cihaz çalışıyor (transmit durumu bilinmiyor)", BrYesil);
         }
-        return false;
+        return true;
     }
 
     private void SetTestUI(bool calisiyor)
@@ -253,7 +280,6 @@ public partial class MainWindow : Window
 
     private static string KisaPath(string path)
     {
-        // "USB\VID_0D0B&PID_1002\5&1234&0&1" → "5&1234&0&1"
         int i = path.LastIndexOf('\\');
         return i >= 0 ? path[(i + 1)..] : path;
     }
@@ -359,10 +385,46 @@ public partial class MainWindow : Window
 
     // ── Log yardımcıları ─────────────────────────────────────────
 
+    private void AcLogPanel()
+    {
+        SplitterRowDef.Height  = new GridLength(5);
+        if (LogRowDef.Height.Value == 0)
+            LogRowDef.Height = new GridLength(220);
+        LogSplitter.Visibility = Visibility.Visible;
+        LogPanel.Visibility    = Visibility.Visible;
+    }
+
     private void LogEkle(string metin, Brush renk)
     {
-        _loglar.Add(new LogGirdi(metin, renk));
-        Dispatcher.InvokeAsync(() => LogScroll.ScrollToBottom(), DispatcherPriority.Background);
+        var para = new Paragraph(new Run(metin))
+        {
+            Foreground = renk,
+            Margin     = new Thickness(0),
+            LineHeight = 16,
+        };
+        LogKutu.Document.Blocks.Add(para);
+        Dispatcher.InvokeAsync(() => LogKutu.ScrollToEnd(), DispatcherPriority.Background);
+    }
+
+    private void LogKopyalaBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var text = new TextRange(LogKutu.Document.ContentStart, LogKutu.Document.ContentEnd).Text;
+        if (!string.IsNullOrWhiteSpace(text))
+            Clipboard.SetText(text);
+    }
+
+    private void LogKaydetBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title    = "Log'u Kaydet",
+            Filter   = "Metin dosyası|*.txt|Tüm dosyalar|*.*",
+            FileName = $"arcnet-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        var text = new TextRange(LogKutu.Document.ContentStart, LogKutu.Document.ContentEnd).Text;
+        File.WriteAllText(dlg.FileName, text, System.Text.Encoding.UTF8);
     }
 
     private static readonly Brush BrBeyaz   = Dondur(0xCD, 0xD6, 0xF4);
@@ -485,11 +547,8 @@ public partial class MainWindow : Window
 
 public enum TestSonucu { Bilinmiyor, Calisiyor, Basarili, Basarisiz }
 
-public record LogGirdi(string Metin, Brush Renk);
-
 public class CihazSatiri : INotifyPropertyChanged
 {
-    // Sabit sürücü bilgileri
     public string PID           { get; }
     public string SurucuServisi { get; }
     public string CihazTipi     { get; }
@@ -499,7 +558,6 @@ public class CihazSatiri : INotifyPropertyChanged
     public Brush  RozetArka     { get; }
     public Brush  RozetYazi     { get; }
 
-    // Mutable: test sonucu (INotifyPropertyChanged ile DataGrid'i günceller)
     private TestSonucu _testSonucu = TestSonucu.Bilinmiyor;
     public TestSonucu TestSonucu
     {
@@ -541,7 +599,6 @@ public class CihazSatiri : INotifyPropertyChanged
         _                    => TYaziX,
     };
 
-    // Statik frozen brush'lar — her property erişiminde yeni nesne yaratmaz
     private static readonly Brush TArkaX = Fırça(0x1E, 0x1E, 0x2E);
     private static readonly Brush TArkaC = Fırça(0x4A, 0x3B, 0x1A);
     private static readonly Brush TArkaB = Fırça(0x26, 0x4A, 0x2E);

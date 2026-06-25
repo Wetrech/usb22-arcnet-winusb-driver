@@ -3,12 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Wetrech ARCNET Yöneticisi"
         Height="680" Width="1020"
-        MinHeight="460" MinWidth="760"
+        MinHeight="480" MinWidth="760"
         WindowStartupLocation="CenterScreen"
         Background="#1E1E2E">
 
     <Window.Resources>
-        <!-- Yenile butonu -->
+        <!-- Yenile / küçük araç butonları -->
         <Style x:Key="RefreshButton" TargetType="Button">
             <Setter Property="Background" Value="#45475A"/>
             <Setter Property="Foreground" Value="#CDD6F4"/>
@@ -38,7 +38,7 @@
             </Setter>
         </Style>
 
-        <!-- Test butonu -->
+        <!-- Test butonları -->
         <Style x:Key="TestButton" TargetType="Button">
             <Setter Property="Background" Value="#89DCEB"/>
             <Setter Property="Foreground" Value="#1E1E2E"/>
@@ -97,15 +97,22 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Paragraf boşluğunu sıfırla (RichTextBox log için) -->
+        <Style TargetType="Paragraph">
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="LineHeight" Value="16"/>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="20">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>   <!-- 0: Başlık -->
-            <RowDefinition Height="Auto"/>   <!-- 1: Araç çubuğu -->
-            <RowDefinition Height="*"/>      <!-- 2: Cihaz listesi -->
-            <RowDefinition Height="Auto"/>   <!-- 3: Log paneli (başta Collapsed) -->
-            <RowDefinition Height="Auto"/>   <!-- 4: Alt bilgi -->
+            <RowDefinition Height="Auto"/>                              <!-- 0: Başlık -->
+            <RowDefinition Height="Auto"/>                              <!-- 1: Araç çubuğu -->
+            <RowDefinition Height="*" MinHeight="100"/>                 <!-- 2: Cihaz listesi -->
+            <RowDefinition x:Name="SplitterRowDef" Height="0"/>        <!-- 3: Sürükleme çubuğu -->
+            <RowDefinition x:Name="LogRowDef"      Height="0"/>        <!-- 4: Log paneli -->
+            <RowDefinition Height="Auto"/>                              <!-- 5: Alt bilgi -->
         </Grid.RowDefinitions>
 
         <!-- Başlık -->
@@ -248,7 +255,7 @@
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
 
-                        <!-- Test sonucu rozeti (başta gizli, test sonrası güncellenir) -->
+                        <!-- Test sonucu rozeti -->
                         <DataGridTemplateColumn Header="Test" Width="115" SortMemberPath="TestMetin">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -287,12 +294,22 @@
             </Grid>
         </Border>
 
-        <!-- Log paneli — kurulum başlayınca görünür -->
-        <Border Grid.Row="3"
+        <!-- Sürükleme çubuğu: cihaz listesi / log arasında -->
+        <GridSplitter Grid.Row="3"
+                      x:Name="LogSplitter"
+                      Visibility="Collapsed"
+                      Height="5"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      Background="#313244"
+                      Cursor="SizeNS"
+                      ResizeBehavior="PreviousAndNext"
+                      Margin="0,2,0,2"/>
+
+        <!-- Log paneli -->
+        <Border Grid.Row="4"
                 x:Name="LogPanel"
                 Visibility="Collapsed"
-                Height="180"
-                Margin="0,10,0,0"
                 Background="#11111B"
                 CornerRadius="6"
                 BorderBrush="#313244"
@@ -303,33 +320,52 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0"
-                           Text="Kurulum Çıktısı"
-                           FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
-                           Foreground="#89B4FA"
-                           Margin="10,6,10,4"/>
+                <!-- Başlık + araç butonları -->
+                <Grid Grid.Row="0" Margin="10,5,8,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <ScrollViewer Grid.Row="1"
-                              x:Name="LogScroll"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Auto"
-                              Margin="6,0,6,6">
-                    <ItemsControl x:Name="LogKutu">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Metin}"
-                                           Foreground="{Binding Renk}"
-                                           FontFamily="Consolas" FontSize="11"
-                                           TextWrapping="NoWrap"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                    <TextBlock Grid.Column="0"
+                               Text="Çıktı Günlüğü"
+                               FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
+                               Foreground="#89B4FA"
+                               VerticalAlignment="Center"/>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="LogKopyalaBtn"
+                                Content="Kopyala"
+                                Style="{StaticResource RefreshButton}"
+                                FontSize="10" Padding="8,3"
+                                Margin="0,0,6,0"
+                                Click="LogKopyalaBtn_Click"/>
+                        <Button x:Name="LogKaydetBtn"
+                                Content="Kaydet…"
+                                Style="{StaticResource RefreshButton}"
+                                FontSize="10" Padding="8,3"
+                                Click="LogKaydetBtn_Click"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- RichTextBox: renkli + seçilebilir + kopyalanabilir -->
+                <RichTextBox Grid.Row="1"
+                             x:Name="LogKutu"
+                             IsReadOnly="True"
+                             Background="Transparent"
+                             Foreground="#CDD6F4"
+                             FontFamily="Consolas" FontSize="11"
+                             BorderThickness="0"
+                             Padding="6,0,6,6"
+                             SelectionBrush="#89B4FA"
+                             SelectionOpacity="0.3"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"/>
             </Grid>
         </Border>
 
         <!-- Alt bilgi -->
-        <TextBlock Grid.Row="4"
+        <TextBlock Grid.Row="5"
                    Margin="0,10,0,0"
                    FontFamily="Segoe UI" FontSize="10"
                    Foreground="#45475A"
