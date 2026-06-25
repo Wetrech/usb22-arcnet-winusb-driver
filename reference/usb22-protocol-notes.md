@@ -304,3 +304,73 @@ reg 0). If (reg0 & 0x02) -> delivered (ARC_OK / ARC_ACKED); else -> not delivere
 (ARC_NOT_ACKED). Note: there may be a short delay before TMA settles; read reg0 a few ms
 after the write, and optionally poll reg0 a few times (e.g. up to ~50-100 ms) for the
 TMA bit before concluding NOT_ACKED.
+
+---
+
+# UPDATE 9 — Long-frame (>253 byte) transmit format (capture 14-big_datas.pcapng)
+
+Source: Wireshark/USBPcap capture of CC driver + Talk.exe transmitting payloads larger
+than 253 bytes. Captured on EP 0x02 OUT bulk transfers.
+
+## Short frame vs Long frame on EP 0x02 OUT
+
+### Short frame (payload 1..253 bytes) — confirmed in UPDATE 2 / 3
+```
+EP0x02 OUT: [dst] [256-L] [data × L]
+  USB transfer total: 2 + L bytes
+  byte0 = destination node ID
+  byte1 = ARCNET count = 256 - L    (ranges 3..255; NEVER 0x00)
+```
+Verified:
+- L=252 → byte1 = 0x04 (256−252 = 4)
+- L=253 → byte1 = 0x03 (256−253 = 3)  ← maximum short-frame payload
+
+**byte1 is NEVER 0x00 for short frames** (minimum count = 256−253 = 3).
+
+### Long frame (payload 254..508 bytes) — NEW
+```
+EP0x02 OUT: [dst] [0x00] [512-L] [data × L]
+  USB transfer total: 3 + L bytes
+  byte0 = destination node ID
+  byte1 = 0x00                    (long-frame marker; impossible in short frame)
+  byte2 = 512 - L                 (effective range 4..255 for L=257..508)
+```
+Disambiguation: byte1 == 0x00 is impossible in a short frame (count ≥ 3), so it
+unambiguously signals long frame on both transmit (EP0x02 OUT) and receive (EP0x86 IN,
+unverified — see below).
+
+Verified in capture:
+- L=370 → header bytes: `[dst] 00 8E`  (0x8E = 142 = 512−370); USB transfer = 373 bytes
+
+Maximum payload: 508 bytes (byte2 minimum = 512−508 = 4; values below 4 are outside
+ARCNET framing constraints).
+
+Note on boundary range (L=254..256): 512−L yields 258, 257, 256 respectively, which
+exceed one byte. These values are NOT observed in capture; behaviour at the boundary is
+UNVERIFIED. Safe implementation: start long-frame format at L=254 with `(512-L) & 0xFF`
+and avoid payloads in this boundary range until confirmed.
+
+## Long-frame receive format — CONFIRMED (same capture)
+Receive-side (EP 0x86 IN) long-frame format mirrors the transmit side with an
+extra leading `src` byte (same as short-frame receive):
+
+```
+EP0x86 IN short: [src][dst][256-L][data × L]        header = 3 bytes
+EP0x86 IN long:  [src][dst][0x00][512-L][data × L]  header = 4 bytes
+```
+
+The disambiguation rule is identical: the "length byte" (byte2 for receive) is
+`0x00` for long frames and always ≥ 3 for short frames (`256-L`, L ≤ 253).
+
+Verified in capture (same 370-byte transfer, receive side):
+- buf = `[src][dst] 00 8E [370 bytes]`  (0x8E = 142 = 512−370) ✓
+- Total bytes received from EP 0x86: 4 (header) + 370 (payload) = 374 bytes
+
+## Summary: frame format by direction
+| Direction | Format | Payload L | Header bytes | EP bytes total |
+|-----------|--------|-----------|--------------|----------------|
+| TX EP0x02 OUT | Short | 1..253 | `[dst][256-L]` (2 B) | 2+L |
+| TX EP0x02 OUT | Long  | 254..508 | `[dst][0x00][512-L]` (3 B) | 3+L |
+| RX EP0x86 IN  | Short | 1..253 | `[src][dst][256-L]` (3 B) | 3+L |
+| RX EP0x86 IN  | Long  | 254..508 | `[src][dst][0x00][512-L]` (4 B) | 4+L |
+| Both | Invalid | > 508 | — | ARC_ERR_PARAM / drop |

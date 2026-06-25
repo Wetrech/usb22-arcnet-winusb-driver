@@ -83,6 +83,12 @@ add_executable(test_listen src/test_listen.c)
 target_link_libraries(test_listen arcnet)
 
 # ---------------------------------------------------------
+# test_bigframe: long-frame (>253 byte) transmit verification (UPDATE 9)
+# ---------------------------------------------------------
+add_executable(test_bigframe src/test_bigframe.c)
+target_link_libraries(test_bigframe arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -95,6 +101,7 @@ if(MSVC)
     target_compile_options(test_threads        PRIVATE /W3)
     target_compile_options(test_lifecycle      PRIVATE /W3)
     target_compile_options(test_listen         PRIVATE /W3)
+    target_compile_options(test_bigframe       PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

@@ -179,7 +179,11 @@ ARCNET_API arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite,
 /* Transmit an ARCNET packet.
  *   destNode : destination ARCNET address
  *   data     : payload bytes (must not be NULL)
- *   len      : payload length, 1..252
+ *   len      : payload length, 1..508
+ *              1..253  -> short frame: EP0x02 OUT [dst][256-len][data]
+ *              254..508 -> long frame: EP0x02 OUT [dst][0x00][512-len][data]
+ *              (UPDATE 9: long-frame format verified at len=370; boundary
+ *               values 254..256 are unconfirmed — avoid if possible.)
  *   waitAck  : if true, polls COM20022 status reg 0 bit 1 (TMA) for up to
  *              ARC_ACK_POLL_BUDGET_MS after sending; returns ARC_OK if the
  *              bit is set (packet acknowledged) or ARC_NOT_ACKED if the
@@ -188,6 +192,7 @@ ARCNET_API arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite,
  *              (higher throughput, no delivery confirmation).
  *   Returns ARC_OK        packet sent (and ACKed when waitAck=true).
  *           ARC_NOT_ACKED packet sent but no ACK within budget.
+ *           ARC_ERR_PARAM len out of range or data=NULL.
  *           ARC_ERR_IO    USB write failed. */
 ARCNET_API arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                                      const uint8_t *data, int len, bool waitAck);
@@ -196,7 +201,9 @@ ARCNET_API arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
  *   ARC_OK        : packet received; *src/*dst/*data/*len are valid.
  *   ARC_NO_PACKET : channel empty; call again later.
  *   ARC_ERR_IO    : hardware failure.
- * data[] must be at least 253 bytes. */
+ * data[] must be at least 508 bytes (current short-frame receive writes up to
+ * 253 bytes; 508 bytes reserved for future long-frame receive support —
+ * UPDATE 9: long-frame receive format not yet captured/verified). */
 ARCNET_API arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
                                     uint8_t *data, int *len);
 
@@ -234,8 +241,8 @@ ARCNET_API void arc_close(arc_ctx_t *ctx);
 typedef struct {
     uint8_t src;
     uint8_t dst;
-    int     len;         /* payload length, 1..252 */
-    uint8_t data[253];
+    int     len;         /* payload length, 1..508 */
+    uint8_t data[508];   /* sized for future long-frame receive support    */
 } arc_packet_t;
 
 /* Callback fired in the listener thread for each received packet.

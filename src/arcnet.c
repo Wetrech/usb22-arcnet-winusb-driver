@@ -464,38 +464,82 @@ static arc_result_t cmd04_internal(arc_ctx_t *ctx)
 static arc_result_t handshake_internal(arc_ctx_t *ctx)
 {
     BYTE  out_buf[10];
-    BYTE  in_buf[ARC_EP_EVT_MAXPACKET];
+    BYTE  in_buf[RX_BUF_SIZE];
     ULONG xferred;
-    ULONG hs_timeout = 500u;
+    ULONG drain_timeout = 50u;   /* short per-read so the loop exits fast when empty */
     DWORD err;
+    int   drained = 0;
 
+    /* Drain loop: poll EP0x02/EP0x86 in pairs until the device replies with
+     * an all-zero (no-pending-packet) response or the read times out.  Each
+     * extra iteration discards one stale packet left in the device buffer by a
+     * previous session.  50 ms per attempt means a clean channel exits in one
+     * timeout instead of the original 500 ms single-read. */
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_RX_IN,
                                PIPE_TRANSFER_TIMEOUT,
-                               sizeof(hs_timeout), &hs_timeout))
+                               sizeof(drain_timeout), &drain_timeout))
         LERR(ctx, "handshake: SetPipePolicy EP0x86 warning GLE=%lu\n", GetLastError());
+    if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
+                               PIPE_TRANSFER_TIMEOUT,
+                               sizeof(drain_timeout), &drain_timeout))
+        LERR(ctx, "handshake: SetPipePolicy EP0x02 warning GLE=%lu\n", GetLastError());
 
     memset(out_buf, 0x00, sizeof(out_buf));
-    xferred = 0;
-    if (!WinUsb_WritePipe(ctx->usb_handle, ARC_EP_TX_OUT,
-                           out_buf, sizeof(out_buf), &xferred, NULL)) {
-        LERR(ctx, "handshake: WritePipe EP0x02 failed GLE=%lu\n", GetLastError());
-        return ARC_ERR_IO;
-    }
-    LDBG(ctx, "handshake: sent %lu zero bytes to EP0x02\n", xferred);
 
-    memset(in_buf, 0, sizeof(in_buf));
-    xferred = 0;
-    if (!WinUsb_ReadPipe(ctx->usb_handle, ARC_EP_RX_IN,
-                          in_buf, sizeof(in_buf), &xferred, NULL)) {
-        err = GetLastError();
-        if (err == ERROR_SEM_TIMEOUT) {
-            LDBG(ctx, "handshake: EP0x86 timeout (empty channel, OK)\n");
-            return ARC_OK;
+    for (;;) {
+        if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
+
+        xferred = 0;
+        if (!WinUsb_WritePipe(ctx->usb_handle, ARC_EP_TX_OUT,
+                               out_buf, sizeof(out_buf), &xferred, NULL)) {
+            err = GetLastError();
+            if (err == ERROR_SEM_TIMEOUT) {
+                LDBG(ctx, "handshake: EP0x02 poll timeout -- stopping drain\n");
+                break;
+            }
+            if (is_gone_error(err)) {
+                ctx->device_gone = true;
+                LERR(ctx, "handshake: device gone on WritePipe GLE=%lu\n", err);
+                return ARC_ERR_DEVICE_GONE;
+            }
+            LDBG(ctx, "handshake: WritePipe EP0x02 GLE=%lu -- stopping drain\n", err);
+            break;
         }
-        LERR(ctx, "handshake: ReadPipe EP0x86 failed GLE=%lu\n", err);
-        return ARC_ERR_IO;
+
+        memset(in_buf, 0, sizeof(in_buf));
+        xferred = 0;
+        if (!WinUsb_ReadPipe(ctx->usb_handle, ARC_EP_RX_IN,
+                              in_buf, sizeof(in_buf), &xferred, NULL)) {
+            err = GetLastError();
+            if (err == ERROR_SEM_TIMEOUT) {
+                LDBG(ctx, "handshake: EP0x86 timeout -- channel empty\n");
+                break;
+            }
+            if (is_gone_error(err)) {
+                ctx->device_gone = true;
+                LERR(ctx, "handshake: device gone on ReadPipe GLE=%lu\n", err);
+                return ARC_ERR_DEVICE_GONE;
+            }
+            LDBG(ctx, "handshake: ReadPipe EP0x86 GLE=%lu -- stopping drain\n", err);
+            break;
+        }
+
+        /* src=0 dst=0: device has no queued ARCNET packet, channel is clear. */
+        if (xferred == 0 || (in_buf[0] == 0 && in_buf[1] == 0)) {
+            LDBG(ctx, "handshake: EP0x86 empty response -- channel clear\n");
+            break;
+        }
+
+        drained++;
+        arc_log_hex(ctx, ARC_LOG_DEBUG,
+                    "handshake: discarded stale packet", in_buf, xferred);
     }
-    arc_log_hex(ctx, ARC_LOG_DEBUG, "handshake: received", in_buf, xferred);
+
+    if (drained > 0)
+        LINFO(ctx, "handshake: drained %d stale packet(s) from previous session\n", drained);
+    else
+        LDBG(ctx, "handshake: EP0x86 was clean\n");
+
     return ARC_OK;
 }
 
@@ -514,6 +558,11 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
     if (!ctx) return ARC_ERR_OPEN;
     EnterCriticalSection(&ctx->lock);
 
+    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
+
+    LDBG(ctx, "arc_init: flushing data pipes\n");
+    pipe_flush(ctx, ARC_EP_TX_OUT);
+    pipe_flush(ctx, ARC_EP_RX_IN);
     if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
 
     r = cmd04_internal(ctx);
@@ -542,8 +591,7 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
 
     arc_log_hex(ctx, ARC_LOG_DEBUG, "arc_init: response", resp, xferred);
     if (xferred >= 6)
-        LDBG(ctx, "arc_init: status byte = 0x%02X%s\n",
-             resp[4], resp[4] == 0x00 ? " (zero)" : " (non-zero, OK)");
+        LINFO(ctx, "arc_init: status=0x%02X\n", resp[4]);
 
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_RX_IN,
                                PIPE_TRANSFER_TIMEOUT,
@@ -690,15 +738,16 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                           const uint8_t *data, int len, bool waitAck)
 {
     arc_result_t r;
-    BYTE         buf[254];
+    BYTE         buf[511];   /* max: 3-byte long-frame header + 508 bytes payload */
     ULONG        xferred;
+    ULONG        total_len;
     ULONG        tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
     DWORD        err;
     ULONGLONG    ack_start;
     uint8_t      reg0;
 
     if (!ctx) return ARC_ERR_OPEN;
-    if (!data || len < 1 || len > 252) {
+    if (!data || len < 1 || len > 508) {
         LERR(ctx, "arc_transmit: invalid argument (data=%p len=%d)\n",
              (void *)data, len);
         return ARC_ERR_PARAM;
@@ -716,11 +765,26 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                                sizeof(tx_timeout), &tx_timeout))
         LERR(ctx, "arc_transmit: SetPipePolicy TX_OUT GLE=%lu\n", GetLastError());
 
-    buf[0] = destNode;
-    buf[1] = (BYTE)((256 - len) & 0xFF);
-    memcpy(buf + 2, data, (size_t)len);
+    if (len <= 253) {
+        /* Short frame (UPDATE 2): [dst][256-L][data] */
+        buf[0] = destNode;
+        buf[1] = (BYTE)((256 - len) & 0xFF);
+        memcpy(buf + 2, data, (size_t)len);
+        total_len = (ULONG)(len + 2);
+        LDBG(ctx, "arc_transmit: short frame dest=0x%02X len=%d header: %02X %02X\n",
+             destNode, len, buf[0], buf[1]);
+    } else {
+        /* Long frame (UPDATE 9): [dst][0x00][512-L][data] */
+        buf[0] = destNode;
+        buf[1] = 0x00;
+        buf[2] = (BYTE)((512 - len) & 0xFF);
+        memcpy(buf + 3, data, (size_t)len);
+        total_len = (ULONG)(len + 3);
+        LDBG(ctx, "arc_transmit: long frame dest=0x%02X len=%d header: %02X %02X %02X\n",
+             destNode, len, buf[0], buf[1], buf[2]);
+    }
 
-    /* Log payload as hex dump */
+    /* Log payload (first bytes; truncated in log for very long payloads) */
     {
         char  hbuf[512]; int hpos; int k;
         hpos = snprintf(hbuf, sizeof(hbuf),
@@ -733,7 +797,7 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
 
     xferred = 0;
     if (!WinUsb_WritePipe(ctx->usb_handle, ARC_EP_TX_OUT,
-                           buf, (ULONG)(len + 2), &xferred, NULL)) {
+                           buf, total_len, &xferred, NULL)) {
         err = GetLastError();
         if (is_gone_error(err)) {
             ctx->device_gone = true;
@@ -749,8 +813,8 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         pipe_flush(ctx, ARC_EP_TX_OUT);
         r = ARC_ERR_IO; goto done;
     }
-    if (xferred != (ULONG)(len + 2)) {
-        LERR(ctx, "arc_transmit: short write %lu/%d\n", xferred, len + 2);
+    if (xferred != total_len) {
+        LERR(ctx, "arc_transmit: short write %lu/%lu\n", xferred, total_len);
         r = ARC_ERR_IO; goto done;
     }
     LDBG(ctx, "arc_transmit: sent %lu bytes to EP0x02\n", xferred);
@@ -894,11 +958,30 @@ static arc_result_t arc_receive_locked(arc_ctx_t *ctx,
 
     *src = buf[0];
     *dst = buf[1];
-    L    = (256 - (int)buf[2]) & 0xFF;
-    if (L == 0 || (int)xferred < L + 3) return ARC_NO_PACKET;
 
-    *len = L;
-    memcpy(data, buf + 3, (size_t)L);
+    if (buf[2] != 0x00) {
+        /* Short frame (UPDATE 3): [src][dst][256-L][data] */
+        L = (256 - (int)buf[2]) & 0xFF;
+        if (L == 0 || (int)xferred < L + 3) return ARC_NO_PACKET;
+        *len = L;
+        memcpy(data, buf + 3, (size_t)L);
+        LDBG(ctx, "arc_receive: short frame src=0x%02X dst=0x%02X len=%d\n",
+             *src, *dst, L);
+    } else {
+        /* Long frame (UPDATE 9): [src][dst][0x00][512-L][data] */
+        if (xferred < 4) return ARC_NO_PACKET;
+        L = 512 - (int)buf[3];
+        if (L < 254 || L > 508 || (int)xferred < L + 4) {
+            LDBG(ctx, "arc_receive: long frame invalid (L=%d xferred=%lu), dropping\n",
+                 L, xferred);
+            return ARC_NO_PACKET;
+        }
+        *len = L;
+        memcpy(data, buf + 4, (size_t)L);
+        LDBG(ctx, "arc_receive: long frame src=0x%02X dst=0x%02X len=%d nextbyte=0x%02X\n",
+             *src, *dst, L, buf[3]);
+    }
+
     r = ARC_OK;
     return r;
 }
