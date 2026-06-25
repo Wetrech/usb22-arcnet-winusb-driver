@@ -77,6 +77,12 @@ add_executable(test_lifecycle src/test_lifecycle.c)
 target_link_libraries(test_lifecycle arcnet psapi.lib)
 
 # ---------------------------------------------------------
+# test_listen: async receive (background listener + queue + callback)
+# ---------------------------------------------------------
+add_executable(test_listen src/test_listen.c)
+target_link_libraries(test_listen arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -88,6 +94,7 @@ if(MSVC)
     target_compile_options(test_multi_recovery PRIVATE /W3)
     target_compile_options(test_threads        PRIVATE /W3)
     target_compile_options(test_lifecycle      PRIVATE /W3)
+    target_compile_options(test_listen         PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

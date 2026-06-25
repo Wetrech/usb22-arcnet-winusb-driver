@@ -224,8 +224,57 @@ ARCNET_API arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize
 ARCNET_API arc_result_t arc_reopen(arc_ctx_t *ctx);
 
 /* Close device, release all resources, and free the context.
+ * If arc_listen_start() was called, stops the listener thread first.
  * Safe to call with NULL. After this call the pointer is invalid. */
 ARCNET_API void arc_close(arc_ctx_t *ctx);
+
+/* -----------------------------------------------------------------------
+ * Received-packet descriptor (used by the async listener API below)
+ * --------------------------------------------------------------------- */
+typedef struct {
+    uint8_t src;
+    uint8_t dst;
+    int     len;         /* payload length, 1..252 */
+    uint8_t data[253];
+} arc_packet_t;
+
+/* Callback fired in the listener thread for each received packet.
+ * Keep it short: copy the packet and return immediately.
+ * Must NOT call any arc_* function on the same context.              */
+typedef void (*arc_recv_fn)(const arc_packet_t *pkt, void *user);
+
+/* -----------------------------------------------------------------------
+ * Async receive API
+ *
+ * arc_listen_start() spawns a background thread that continuously polls
+ * arc_receive() and stores packets in a 256-slot ring buffer.  Packets
+ * can be retrieved with arc_poll_packet() or delivered via a callback
+ * registered with arc_set_recv_callback().
+ *
+ * The synchronous arc_receive() continues to work unchanged alongside
+ * the listener — do not call both on the same context simultaneously.
+ * --------------------------------------------------------------------- */
+
+/* Start the background listener thread.
+ *   Returns ARC_OK, or ARC_IO on CreateThread failure.
+ *   No-op if already running. */
+ARCNET_API arc_result_t arc_listen_start(arc_ctx_t *ctx);
+
+/* Signal the listener to stop and wait for the thread to exit.
+ *   No-op if not running. */
+ARCNET_API arc_result_t arc_listen_stop(arc_ctx_t *ctx);
+
+/* Non-blocking dequeue of one packet from the ring buffer.
+ *   Returns ARC_OK (packet filled in *out) or ARC_NO_PACKET (empty).  */
+ARCNET_API arc_result_t arc_poll_packet(arc_ctx_t *ctx, arc_packet_t *out);
+
+/* Return the number of packets currently waiting in the ring buffer.  */
+ARCNET_API int arc_pending_count(arc_ctx_t *ctx);
+
+/* Register a receive callback (fn=NULL to clear).
+ *   fn is called from the listener thread after each queued packet.   */
+ARCNET_API arc_result_t arc_set_recv_callback(arc_ctx_t *ctx,
+                                              arc_recv_fn fn, void *user);
 
 #ifdef __cplusplus
 }

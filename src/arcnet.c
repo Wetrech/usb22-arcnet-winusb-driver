@@ -32,7 +32,21 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-#define RX_BUF_SIZE  512u
+#define RX_BUF_SIZE          512u
+#define ARC_QUEUE_CAP        256u   /* ring buffer capacity (packets)      */
+#define ARC_LISTEN_POLL_MS    20u   /* EP timeout per listener poll cycle  */
+#define ARC_LISTEN_SLEEP_MS    5u   /* sleep after ARC_NO_PACKET           */
+
+/* -----------------------------------------------------------------------
+ * Internal ring buffer for the async listener
+ * --------------------------------------------------------------------- */
+typedef struct {
+    arc_packet_t pkts[ARC_QUEUE_CAP];
+    int          head;     /* next write index  */
+    int          tail;     /* next read index   */
+    int          count;    /* packets in queue  */
+    int          dropped;  /* dropped (queue full) */
+} arc_queue_t;
 
 /* -----------------------------------------------------------------------
  * Per-device context (opaque to callers; defined here only)
@@ -46,6 +60,14 @@ struct arc_ctx_s {
     void                   *log_user;   /* opaque for log_fn             */
     bool                    device_gone; /* set on fatal USB error        */
     char                    device_path[256];
+
+    /* ---- async receive (arc_listen_start / arc_listen_stop) ---- */
+    CRITICAL_SECTION        queue_lock;   /* protects queue, recv_fn/user */
+    arc_queue_t             queue;
+    arc_recv_fn             recv_fn;
+    void                   *recv_user;
+    HANDLE                  listen_thread; /* NULL = not running           */
+    volatile LONG           listen_stop;   /* set to 1 to signal exit      */
 };
 
 /* -----------------------------------------------------------------------
@@ -255,7 +277,8 @@ arc_ctx_t *arc_open(const char *devicePath, bool verbose)
     ctx = (arc_ctx_t *)calloc(1, sizeof(arc_ctx_t));
     if (!ctx) return NULL;
     InitializeCriticalSection(&ctx->lock);
-    /* calloc zeroed log_fn / log_user; map verbose bool to log level */
+    InitializeCriticalSection(&ctx->queue_lock);
+    /* calloc zeroed all other fields (queue, listen_thread, recv_fn, …) */
     ctx->log_level = verbose ? ARC_LOG_DEBUG : ARC_LOG_NONE;
 
     strncpy(ctx->device_path, path, sizeof(ctx->device_path) - 1);
@@ -329,12 +352,15 @@ void arc_set_verbose(arc_ctx_t *ctx, bool enable)
 void arc_close(arc_ctx_t *ctx)
 {
     if (!ctx) return;
+    arc_listen_stop(ctx);  /* no-op if listener is not running */
+
     EnterCriticalSection(&ctx->lock);
     if (ctx->usb_handle) { WinUsb_Free(ctx->usb_handle); ctx->usb_handle = NULL; }
     if (ctx->dev_handle) { CloseHandle(ctx->dev_handle);  ctx->dev_handle = NULL; }
     LINFO(ctx, "arc_close: done\n");
     LeaveCriticalSection(&ctx->lock);
     DeleteCriticalSection(&ctx->lock);
+    DeleteCriticalSection(&ctx->queue_lock);
     free(ctx);
 }
 
@@ -800,31 +826,29 @@ done:
 }
 
 /* =======================================================================
- * arc_receive
+ * arc_receive_locked  --  internal; caller must hold ctx->lock.
+ * timeout_ms overrides the EP pipe timeout for this one call.
  * ===================================================================== */
-arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
-                         uint8_t *data, int *len)
+static arc_result_t arc_receive_locked(arc_ctx_t *ctx,
+                                        uint8_t *src, uint8_t *dst,
+                                        uint8_t *data, int *len,
+                                        ULONG timeout_ms)
 {
     arc_result_t r;
     BYTE         poll[10];
     BYTE         buf[RX_BUF_SIZE];
     ULONG        xferred;
-    ULONG        pipe_to = ARC_RECEIVE_TIMEOUT_MS;
     DWORD        err;
     BOOL         ok;
     int          L;
 
-    if (!ctx)                          return ARC_ERR_OPEN;
-    if (!src || !dst || !data || !len) return ARC_ERR_PARAM;
-    EnterCriticalSection(&ctx->lock);
-
-    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
+    if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
 
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
-                               PIPE_TRANSFER_TIMEOUT, sizeof(pipe_to), &pipe_to))
+                               PIPE_TRANSFER_TIMEOUT, sizeof(timeout_ms), &timeout_ms))
         LERR(ctx, "arc_receive: SetPipePolicy TX_OUT GLE=%lu\n", GetLastError());
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_RX_IN,
-                               PIPE_TRANSFER_TIMEOUT, sizeof(pipe_to), &pipe_to))
+                               PIPE_TRANSFER_TIMEOUT, sizeof(timeout_ms), &timeout_ms))
         LERR(ctx, "arc_receive: SetPipePolicy RX_IN GLE=%lu\n", GetLastError());
 
     memset(poll, 0x00, sizeof(poll));
@@ -836,11 +860,11 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             LERR(ctx, "arc_receive: device gone on WritePipe EP0x02 GLE=%lu\n", err);
-            r = ARC_ERR_DEVICE_GONE; goto done;
+            return ARC_ERR_DEVICE_GONE;
         }
         LDBG(ctx, "arc_receive: WritePipe EP0x02 GLE=%lu -> flush+NO_PACKET\n", err);
         pipe_flush(ctx, ARC_EP_TX_OUT);
-        r = ARC_NO_PACKET; goto done;
+        return ARC_NO_PACKET;
     }
     LDBG(ctx, "arc_receive: poll wrote %lu bytes to EP0x02\n", xferred);
 
@@ -853,31 +877,191 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
         if (err == ERROR_SEM_TIMEOUT) {
             LDBG(ctx, "arc_receive: EP0x86 timeout (no packet) -> flush\n");
             pipe_flush(ctx, ARC_EP_RX_IN);
-            r = ARC_NO_PACKET; goto done;
+            return ARC_NO_PACKET;
         }
         if (is_gone_error(err)) {
             ctx->device_gone = true;
             LERR(ctx, "arc_receive: device gone on ReadPipe EP0x86 GLE=%lu\n", err);
-            r = ARC_ERR_DEVICE_GONE; goto done;
+            return ARC_ERR_DEVICE_GONE;
         }
         LERR(ctx, "arc_receive: ReadPipe EP0x86 GLE=%lu -> flush+IO\n", err);
         pipe_flush(ctx, ARC_EP_RX_IN);
-        r = ARC_ERR_IO; goto done;
+        return ARC_ERR_IO;
     }
     LDBG(ctx, "arc_receive: read %lu bytes from EP0x86\n", xferred);
 
-    if (xferred < 3 || (buf[0] == 0 && buf[1] == 0)) { r = ARC_NO_PACKET; goto done; }
+    if (xferred < 3 || (buf[0] == 0 && buf[1] == 0)) return ARC_NO_PACKET;
 
     *src = buf[0];
     *dst = buf[1];
     L    = (256 - (int)buf[2]) & 0xFF;
-    if (L == 0 || (int)xferred < L + 3) { r = ARC_NO_PACKET; goto done; }
+    if (L == 0 || (int)xferred < L + 3) return ARC_NO_PACKET;
 
     *len = L;
     memcpy(data, buf + 3, (size_t)L);
     r = ARC_OK;
+    return r;
+}
 
+/* =======================================================================
+ * arc_receive  --  public; acquires ctx->lock for the duration of the poll.
+ * ===================================================================== */
+arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
+                         uint8_t *data, int *len)
+{
+    arc_result_t r;
+    if (!ctx)                          return ARC_ERR_OPEN;
+    if (!src || !dst || !data || !len) return ARC_ERR_PARAM;
+    EnterCriticalSection(&ctx->lock);
+    r = arc_receive_locked(ctx, src, dst, data, len, ARC_RECEIVE_TIMEOUT_MS);
+    LeaveCriticalSection(&ctx->lock);
+    return r;
+}
+
+/* =======================================================================
+ * listen_worker  --  background thread body for arc_listen_start.
+ *
+ * Each iteration:
+ *   1. Acquire ctx->lock, call arc_receive_locked (short timeout), release.
+ *   2. On ARC_OK: enqueue under queue_lock; fire callback outside all locks.
+ *   3. On ARC_NO_PACKET: brief Sleep before next poll.
+ *   4. On error: longer back-off Sleep.
+ * ===================================================================== */
+static DWORD WINAPI listen_worker(LPVOID arg)
+{
+    arc_ctx_t   *ctx = (arc_ctx_t *)arg;
+
+    while (!InterlockedCompareExchange(&ctx->listen_stop, 0, 0)) {
+        arc_packet_t pkt;
+        arc_result_t r;
+        arc_recv_fn  fn;
+        void        *fn_user;
+
+        EnterCriticalSection(&ctx->lock);
+        if (ctx->device_gone) {
+            LeaveCriticalSection(&ctx->lock);
+            Sleep(50);
+            continue;
+        }
+        r = arc_receive_locked(ctx, &pkt.src, &pkt.dst, pkt.data, &pkt.len,
+                               ARC_LISTEN_POLL_MS);
+        LeaveCriticalSection(&ctx->lock);
+
+        if (r == ARC_OK) {
+            EnterCriticalSection(&ctx->queue_lock);
+            if (ctx->queue.count < (int)ARC_QUEUE_CAP) {
+                ctx->queue.pkts[ctx->queue.head] = pkt;
+                ctx->queue.head = (ctx->queue.head + 1) % (int)ARC_QUEUE_CAP;
+                ctx->queue.count++;
+            } else {
+                /* Drop oldest to make room for newest */
+                ctx->queue.tail = (ctx->queue.tail + 1) % (int)ARC_QUEUE_CAP;
+                ctx->queue.pkts[ctx->queue.head] = pkt;
+                ctx->queue.head = (ctx->queue.head + 1) % (int)ARC_QUEUE_CAP;
+                ctx->queue.dropped++;
+            }
+            fn      = ctx->recv_fn;
+            fn_user = ctx->recv_user;
+            LeaveCriticalSection(&ctx->queue_lock);
+
+            if (fn) fn(&pkt, fn_user);  /* outside all locks */
+
+        } else if (r == ARC_NO_PACKET) {
+            Sleep(ARC_LISTEN_SLEEP_MS);
+        } else {
+            Sleep(50);  /* IO error or device gone — back off */
+        }
+    }
+    return 0;
+}
+
+/* =======================================================================
+ * arc_listen_start
+ * ===================================================================== */
+arc_result_t arc_listen_start(arc_ctx_t *ctx)
+{
+    arc_result_t r = ARC_OK;
+    if (!ctx) return ARC_ERR_OPEN;
+    EnterCriticalSection(&ctx->lock);
+    if (ctx->listen_thread) { /* already running */ goto done; }
+    InterlockedExchange(&ctx->listen_stop, 0);
+    ctx->listen_thread = CreateThread(NULL, 0, listen_worker, ctx, 0, NULL);
+    if (!ctx->listen_thread) {
+        LERR(ctx, "arc_listen_start: CreateThread failed GLE=%lu\n", GetLastError());
+        r = ARC_ERR_IO;
+    } else {
+        LINFO(ctx, "arc_listen_start: listener thread started\n");
+    }
 done:
     LeaveCriticalSection(&ctx->lock);
     return r;
+}
+
+/* =======================================================================
+ * arc_listen_stop
+ * ===================================================================== */
+arc_result_t arc_listen_stop(arc_ctx_t *ctx)
+{
+    HANDLE th;
+    if (!ctx) return ARC_ERR_OPEN;
+
+    InterlockedExchange(&ctx->listen_stop, 1);
+
+    EnterCriticalSection(&ctx->lock);
+    th = ctx->listen_thread;
+    if (th) ctx->listen_thread = NULL;
+    LeaveCriticalSection(&ctx->lock);
+
+    if (!th) return ARC_OK;  /* was not running */
+
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+    LINFO(ctx, "arc_listen_stop: listener thread joined\n");
+    return ARC_OK;
+}
+
+/* =======================================================================
+ * arc_poll_packet
+ * ===================================================================== */
+arc_result_t arc_poll_packet(arc_ctx_t *ctx, arc_packet_t *out)
+{
+    arc_result_t r;
+    if (!ctx || !out) return ARC_ERR_PARAM;
+    EnterCriticalSection(&ctx->queue_lock);
+    if (ctx->queue.count == 0) {
+        r = ARC_NO_PACKET;
+    } else {
+        *out = ctx->queue.pkts[ctx->queue.tail];
+        ctx->queue.tail = (ctx->queue.tail + 1) % (int)ARC_QUEUE_CAP;
+        ctx->queue.count--;
+        r = ARC_OK;
+    }
+    LeaveCriticalSection(&ctx->queue_lock);
+    return r;
+}
+
+/* =======================================================================
+ * arc_pending_count
+ * ===================================================================== */
+int arc_pending_count(arc_ctx_t *ctx)
+{
+    int n;
+    if (!ctx) return 0;
+    EnterCriticalSection(&ctx->queue_lock);
+    n = ctx->queue.count;
+    LeaveCriticalSection(&ctx->queue_lock);
+    return n;
+}
+
+/* =======================================================================
+ * arc_set_recv_callback
+ * ===================================================================== */
+arc_result_t arc_set_recv_callback(arc_ctx_t *ctx, arc_recv_fn fn, void *user)
+{
+    if (!ctx) return ARC_ERR_OPEN;
+    EnterCriticalSection(&ctx->queue_lock);
+    ctx->recv_fn   = fn;
+    ctx->recv_user = user;
+    LeaveCriticalSection(&ctx->queue_lock);
+    return ARC_OK;
 }
