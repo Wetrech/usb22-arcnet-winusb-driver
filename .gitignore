@@ -4,6 +4,7 @@ out/
 *.exe
 *.pdb
 *.ilk
+*.dll
 *.exp
 *.lib
 .vs/

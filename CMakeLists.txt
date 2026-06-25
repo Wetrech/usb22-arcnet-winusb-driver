@@ -6,12 +6,21 @@ add_definitions(-UUNICODE -U_UNICODE)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 # ---------------------------------------------------------
-# arcnet: static library  (protocol implementation)
+# arcnet: shared library / DLL  (protocol implementation)
 # src/arcnet.c  +  src/arcnet.h  (public header)
+# Produces: arcnet.dll  +  arcnet.lib (import library)
 # ---------------------------------------------------------
-add_library(arcnet STATIC src/arcnet.c)
+add_library(arcnet SHARED src/arcnet.c)
 target_include_directories(arcnet PUBLIC src)
+target_compile_definitions(arcnet PRIVATE ARCNET_BUILD_DLL)
 target_link_libraries(arcnet setupapi.lib winusb.lib)
+
+# Place arcnet.dll in build/ alongside the test executables so they can
+# find it at runtime without PATH manipulation.
+set_target_properties(arcnet PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
 
 # ---------------------------------------------------------
 # test_arcnet: end-to-end test executable

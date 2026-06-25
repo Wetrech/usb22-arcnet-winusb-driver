@@ -1,9 +1,10 @@
 /*
- * arcnet.h  --  Public API for the USB22-485 WinUSB user-mode library.
+ * arcnet.h  --  Public API for the USB22-485 WinUSB user-mode DLL.
  *
  * Hardware  : Contemporary Controls USB22-485 (VID=0x0D0B, PID=0x1002)
  * Protocol  : reference/usb22-protocol-notes.md (UPDATE 1-6)
- * Build     : MSVC + CMake; link arcnet.lib (static) + setupapi.lib + winusb.lib
+ * Build     : MSVC + CMake; link arcnet.lib (import lib) — arcnet.dll must be
+ *             present at runtime next to the executable.
  *
  * Multiple devices can be open simultaneously: each arc_open() call
  * allocates an independent arc_ctx_t context.
@@ -22,6 +23,22 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
+/* -----------------------------------------------------------------------
+ * DLL export / import
+ *   When building arcnet.dll define ARCNET_BUILD_DLL (set automatically
+ *   by CMake via target_compile_definitions on the arcnet target).
+ *   Consumers that include this header do NOT define it — they get imports.
+ * --------------------------------------------------------------------- */
+#ifdef ARCNET_BUILD_DLL
+#  define ARCNET_API __declspec(dllexport)
+#else
+#  define ARCNET_API __declspec(dllimport)
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* -----------------------------------------------------------------------
  * Device identification
@@ -105,13 +122,13 @@ typedef struct arc_ctx_s arc_ctx_t;
  * --------------------------------------------------------------------- */
 
 /* Return a short string for a result code. */
-const char *arc_result_str(arc_result_t r);
+ARCNET_API const char *arc_result_str(arc_result_t r);
 
 /* Enumerate CC ARCNET devices.
  *   paths[]    : caller-supplied array; each element holds a device path.
  *   maxDevices : capacity of paths[].
  *   Returns    : number of devices found (0 = none). */
-int arc_list_devices(char paths[][256], int maxDevices);
+ARCNET_API int arc_list_devices(char paths[][256], int maxDevices);
 
 /* Open a device and allocate a context.
  *   devicePath : WinUSB interface path (from arc_list_devices).
@@ -119,44 +136,45 @@ int arc_list_devices(char paths[][256], int maxDevices);
  *   verbose    : enable diagnostic output to stdout/stderr.
  *   Returns    : non-NULL context on success, NULL on failure.
  *   The returned context must be released with arc_close(). */
-arc_ctx_t *arc_open(const char *devicePath, bool verbose);
+ARCNET_API arc_ctx_t *arc_open(const char *devicePath, bool verbose);
 
 /* Set the log level for an open context.
  *   ARC_LOG_NONE  (0) — silent (default)
  *   ARC_LOG_ERROR (1) — errors only
  *   ARC_LOG_INFO  (2) — open / init / reconnect / close events + errors
  *   ARC_LOG_DEBUG (3) — full protocol trace                              */
-void arc_set_log_level(arc_ctx_t *ctx, arc_log_level_t level);
+ARCNET_API void arc_set_log_level(arc_ctx_t *ctx, arc_log_level_t level);
 
 /* Set a log callback.  When fn is non-NULL all log output goes to fn
  * instead of stderr.  Pass fn=NULL to restore the default (stderr).     */
-void arc_set_log_callback(arc_ctx_t *ctx, arc_log_fn fn, void *user);
+ARCNET_API void arc_set_log_callback(arc_ctx_t *ctx, arc_log_fn fn, void *user);
 
 /* Backward-compatible verbose toggle:
  *   enable=true  -> ARC_LOG_DEBUG
  *   enable=false -> ARC_LOG_NONE                                         */
-void arc_set_verbose(arc_ctx_t *ctx, bool enable);
+ARCNET_API void arc_set_verbose(arc_ctx_t *ctx, bool enable);
 
 /* Initialize the ARCNET node.
  *   Runs the full startup sequence:
  *     (1) cmd04  -- session-start command (UPDATE 4)
  *     (2) handshake -- data-channel probe (UPDATE 5)
- *     (3) COM20020 config command (UPDATE 6; waits up to 5 s for response)
+ *     (3) COM20022 config command (UPDATE 6; waits up to 5 s for response)
  *
  *   nodeID         : this node's ARCNET address (0x01..0xFE)
  *   timeout        : reconfiguration timeout byte (0x18 recommended)
- *   clockPrescaler : COM20020 clock divisor (0x00 = default speed)
+ *   clockPrescaler : COM20022 clock divisor (0x00 = default speed)
  *   recvBroadcasts : receive broadcast frames (destination = node 0)
  *
  *   Returns ARC_OK on success. */
-arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
-                      uint8_t clockPrescaler, bool recvBroadcasts);
+ARCNET_API arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
+                                 uint8_t clockPrescaler, bool recvBroadcasts);
 
-/* Read or write a COM20020 chip register.
+/* Read or write a COM20022 chip register.
  *   bWrite=false : *value is filled with the register value on return.
  *   bWrite=true  : *value is written to the register.
  *   Returns ARC_OK on success. */
-arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *value);
+ARCNET_API arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite,
+                                     uint8_t reg, uint8_t *value);
 
 /* Transmit an ARCNET packet.
  *   destNode : destination ARCNET address
@@ -171,16 +189,16 @@ arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite, uint8_t reg, uint8_t *val
  *   Returns ARC_OK        packet sent (and ACKed when waitAck=true).
  *           ARC_NOT_ACKED packet sent but no ACK within budget.
  *           ARC_ERR_IO    USB write failed. */
-arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
-                          const uint8_t *data, int len, bool waitAck);
+ARCNET_API arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
+                                     const uint8_t *data, int len, bool waitAck);
 
 /* Poll for a received ARCNET packet (non-blocking within ARC_RECEIVE_TIMEOUT_MS).
  *   ARC_OK        : packet received; *src/*dst/*data/*len are valid.
  *   ARC_NO_PACKET : channel empty; call again later.
  *   ARC_ERR_IO    : hardware failure.
  * data[] must be at least 253 bytes. */
-arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
-                         uint8_t *data, int *len);
+ARCNET_API arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
+                                    uint8_t *data, int *len);
 
 /* Read a raw event/status packet from EP 0x81 (unsolicited device -> host).
  *   timeout_ms : pipe timeout; if 0 the current policy is kept.
@@ -190,8 +208,8 @@ arc_result_t arc_receive(arc_ctx_t *ctx, uint8_t *src, uint8_t *dst,
  *   Returns ARC_OK        packet received.
  *           ARC_NO_PACKET timeout, no data.
  *           ARC_ERR_IO    USB error. */
-arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
-                             uint32_t timeout_ms, int *out_len);
+ARCNET_API arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
+                                       uint32_t timeout_ms, int *out_len);
 
 /* Attempt to reopen a context whose device has been physically removed.
  *
@@ -203,10 +221,14 @@ arc_result_t arc_read_event(arc_ctx_t *ctx, uint8_t *buf, int bufsize,
  *   On ARC_OK the handles are valid but the ARCNET node is not yet
  *   initialized — the caller MUST call arc_init() before transmitting
  *   or receiving. */
-arc_result_t arc_reopen(arc_ctx_t *ctx);
+ARCNET_API arc_result_t arc_reopen(arc_ctx_t *ctx);
 
 /* Close device, release all resources, and free the context.
  * Safe to call with NULL. After this call the pointer is invalid. */
-void arc_close(arc_ctx_t *ctx);
+ARCNET_API void arc_close(arc_ctx_t *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARCNET_H */
