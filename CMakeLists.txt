@@ -62,6 +62,12 @@ add_executable(test_threads src/test_threads.c)
 target_link_libraries(test_threads arcnet)
 
 # ---------------------------------------------------------
+# test_lifecycle: handle / resource hygiene stress test
+# ---------------------------------------------------------
+add_executable(test_lifecycle src/test_lifecycle.c)
+target_link_libraries(test_lifecycle arcnet psapi.lib)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -72,6 +78,7 @@ if(MSVC)
     target_compile_options(test_recovery       PRIVATE /W3)
     target_compile_options(test_multi_recovery PRIVATE /W3)
     target_compile_options(test_threads        PRIVATE /W3)
+    target_compile_options(test_lifecycle      PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()
