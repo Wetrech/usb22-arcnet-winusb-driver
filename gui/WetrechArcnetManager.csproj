@@ -14,4 +14,11 @@
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
+  <!-- arcnet.dll next to the exe so P/Invoke can find it at runtime -->
+  <ItemGroup>
+    <None Include="..\build\arcnet.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

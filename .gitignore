@@ -18,3 +18,6 @@ interop_test/obj/
 *.pcapng
 build_log.bat
 build_output.txt
+build*.bat
+build_*.txt
+b6*.txt
