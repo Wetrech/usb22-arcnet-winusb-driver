@@ -75,8 +75,7 @@ extern "C" {
 #define ARC_BUDGET_INIT_MS      5000u   /* Response budget: init (~2.5 s on device) */
 #define ARC_RECEIVE_TIMEOUT_MS  150u    /* EP 0x86 / EP 0x02 timeout per arc_receive() poll  */
 #define ARC_TRANSMIT_TIMEOUT_MS  2000u  /* EP 0x02 timeout for real arc_transmit()           */
-#define ARC_ACK_POLL_BUDGET_MS    100u  /* How long to poll reg0 for TMA bit after transmit  */
-#define ARC_ACK_POLL_INTERVAL_MS   10u  /* Sleep between reg0 reads in ACK poll loop         */
+#define ARC_ACK_EVENT_TIMEOUT_MS  200u  /* EP0x81 wait for TX-complete event after transmit  */
 
 /* -----------------------------------------------------------------------
  * Log levels  (per-context; default ARC_LOG_NONE)
@@ -184,10 +183,10 @@ ARCNET_API arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite,
  *              254..508 -> long frame: EP0x02 OUT [dst][0x00][512-len][data]
  *              (UPDATE 9: long-frame format verified at len=370; boundary
  *               values 254..256 are unconfirmed — avoid if possible.)
- *   waitAck  : if true, polls COM20022 status reg 0 bit 1 (TMA) for up to
- *              ARC_ACK_POLL_BUDGET_MS after sending; returns ARC_OK if the
- *              bit is set (packet acknowledged) or ARC_NOT_ACKED if the
- *              budget expires without seeing it.
+ *   waitAck  : if true, waits up to ARC_ACK_EVENT_TIMEOUT_MS for the
+ *              TX-complete event on EP0x81 (UPDATE 10); returns ARC_OK if
+ *              b4=0x03 (ACK) or ARC_NOT_ACKED if b4=0x01 (no ACK) or
+ *              timeout.  No reg0/TMA polling — event-driven.
  *              if false, returns ARC_OK as soon as the USB write succeeds
  *              (higher throughput, no delivery confirmation).
  *   Returns ARC_OK        packet sent (and ACKed when waitAck=true).

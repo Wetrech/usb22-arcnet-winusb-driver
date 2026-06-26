@@ -374,3 +374,61 @@ Verified in capture (same 370-byte transfer, receive side):
 | RX EP0x86 IN  | Short | 1..253 | `[src][dst][256-L]` (3 B) | 3+L |
 | RX EP0x86 IN  | Long  | 254..508 | `[src][dst][0x00][512-L]` (4 B) | 4+L |
 | Both | Invalid | > 508 | — | ARC_ERR_PARAM / drop |
+
+---
+
+# UPDATE 10 — TX-complete ACK event on EP0x81 (test_txevent capture)
+
+## Discovery
+
+reg0/TMA polling (UPDATE 8) is fundamentally unreliable: TMA is a momentary pulse
+cleared by token-passing (~1–2 ms), while the arc_register round-trip (two USB
+transfers on EP0x01/EP0x81) takes 2–6 ms — a race that is lost most of the time.
+Observed symptom: art arda TX'lerde ilk 1-2 ARC_OK sonra sürekli ARC_NOT_ACKED.
+
+Root cause confirmed via test_txevent: the data IS delivered (node2 receives all
+frames), but TMA is gone by the time we read reg0.
+
+## TX-complete event (opcode 0x20) on EP0x81
+
+After `WinUsb_WritePipe(EP0x02, frame)` succeeds, the device firmware **pushes a
+0x20 event on EP0x81** to report the transmit outcome.  This is the same event
+channel used for RECON (UPDATE 1: WakeOnRecon / WakeOnReceive / **WakeOnTXComplete**).
+
+Observed event format (6 bytes):
+```
+byte0 = 0x20   (opcode: async event)
+byte1 = 0x00
+byte2 = 0x00
+byte3 = 0x00
+byte4 = XX     ← TX outcome indicator
+byte5 = 0x00
+```
+
+### byte4 values (verified, 2-node setup, 5/5 consistent each)
+
+| Scenario | b4 | Meaning |
+|----------|----|---------|
+| node1 → node2 (receiver ALIVE, ACK expected) | `0x03` | ACK received — TX delivered |
+| node1 → node5 (receiver DEAD, no ACK)        | `0x01` | no ACK — RECON / not delivered |
+
+Previously observed (UPDATE 8, RECON event with no peer):
+| Standalone RECON (no peer attached) | `0x04` | network reconfiguration |
+
+### b4 semantics — partial, 2-node only
+
+Full semantics of byte4 are **not confirmed** beyond a 2-node setup.  b4 may encode
+node count or additional status bits.  Known reliable values:
+- `0x03` → ACK received → ARC_OK
+- `0x01` → no ACK → ARC_NOT_ACKED
+- `0x04` → RECON → ARC_NOT_ACKED (existing behaviour)
+- other  → unknown; log and treat as ARC_OK until more data
+
+## Implementation
+
+`arc_transmit(waitAck=true)` now reads EP0x81 (up to ARC_ACK_EVENT_TIMEOUT_MS = 200 ms)
+instead of polling reg0.  The read loop skips non-0x20 packets and exits on the first
+0x20 event.  Result: deterministic, race-free ACK detection.
+
+Timing: TX-complete event arrives within ~5–15 ms of WritePipe returning.  No sleep
+required between TX and first read.

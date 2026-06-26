@@ -89,6 +89,18 @@ add_executable(test_bigframe src/test_bigframe.c)
 target_link_libraries(test_bigframe arcnet)
 
 # ---------------------------------------------------------
+# test_txloop: rapid-transmit ACK regression diagnosis
+# ---------------------------------------------------------
+add_executable(test_txloop src/test_txloop.c)
+target_link_libraries(test_txloop arcnet)
+
+# ---------------------------------------------------------
+# test_txevent: EP0x81 TX-complete event discovery
+# ---------------------------------------------------------
+add_executable(test_txevent src/test_txevent.c)
+target_link_libraries(test_txevent arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -102,6 +114,8 @@ if(MSVC)
     target_compile_options(test_lifecycle      PRIVATE /W3)
     target_compile_options(test_listen         PRIVATE /W3)
     target_compile_options(test_bigframe       PRIVATE /W3)
+    target_compile_options(test_txloop         PRIVATE /W3)
+    target_compile_options(test_txevent        PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

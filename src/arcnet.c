@@ -744,7 +744,6 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
     ULONG        tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
     DWORD        err;
     ULONGLONG    ack_start;
-    uint8_t      reg0;
 
     if (!ctx) return ARC_ERR_OPEN;
     if (!data || len < 1 || len > 508) {
@@ -824,23 +823,84 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         r = ARC_OK; goto done;
     }
 
-    ack_start = GetTickCount64();
-    while ((GetTickCount64() - ack_start) < ARC_ACK_POLL_BUDGET_MS) {
-        reg0 = 0;
-        if (arc_register(ctx, false, 0, &reg0) == ARC_OK) {
-            LDBG(ctx, "arc_transmit: ACK poll reg0=0x%02X TMA=%d (+%lu ms)\n",
-                 reg0, (reg0 >> 1) & 1,
-                 (ULONG)(GetTickCount64() - ack_start));
-            if (reg0 & 0x02) {
-                LDBG(ctx, "arc_transmit: ACK received (TMA set) -> ARC_OK\n");
-                r = ARC_OK; goto done;
+    /* Event-driven ACK detection (UPDATE 10).
+     * After the frame is written to EP0x02, the device firmware pushes a
+     * 0x20 TX-complete event on EP0x81.
+     *   b4=0x03: ACK received (observed, 2-node setup)
+     *   b4=0x01: no ACK / RECON (observed, 2-node setup)
+     * Full b4 semantics for larger networks not yet verified. */
+    {
+        BYTE      ev_buf[ARC_EP_EVT_MAXPACKET];
+        ULONG     ev_xferred;
+        ULONGLONG ack_deadline;
+        ULONG     per_ms;
+        BOOL      ev_ok;
+        DWORD     ev_err;
+
+        ack_start    = GetTickCount64();
+        ack_deadline = ack_start + ARC_ACK_EVENT_TIMEOUT_MS;
+
+        for (;;) {
+            ULONGLONG now = GetTickCount64();
+            if (now >= ack_deadline) {
+                LINFO(ctx, "arc_transmit: no TX-event in %u ms -> ARC_NOT_ACKED\n",
+                      ARC_ACK_EVENT_TIMEOUT_MS);
+                r = ARC_NOT_ACKED; goto done;
+            }
+            per_ms = (ULONG)(ack_deadline - now);
+            if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
+                                       PIPE_TRANSFER_TIMEOUT,
+                                       sizeof(per_ms), &per_ms))
+                LERR(ctx, "arc_transmit: SetPipePolicy EP0x81 GLE=%lu\n",
+                     GetLastError());
+
+            memset(ev_buf, 0, sizeof(ev_buf));
+            ev_xferred = 0;
+            ev_ok = WinUsb_ReadPipe(ctx->usb_handle, ARC_EP_EVT_IN,
+                                     ev_buf, sizeof(ev_buf), &ev_xferred, NULL);
+            if (!ev_ok) {
+                ev_err = GetLastError();
+                if (ev_err == ERROR_SEM_TIMEOUT) {
+                    LINFO(ctx, "arc_transmit: EP0x81 timeout -> ARC_NOT_ACKED\n");
+                    r = ARC_NOT_ACKED; goto done;
+                }
+                if (is_gone_error(ev_err)) {
+                    ctx->device_gone = true;
+                    LERR(ctx, "arc_transmit: device gone on EP0x81 GLE=%lu\n", ev_err);
+                    r = ARC_ERR_DEVICE_GONE; goto done;
+                }
+                LERR(ctx, "arc_transmit: ReadPipe EP0x81 GLE=%lu\n", ev_err);
+                r = ARC_ERR_IO; goto done;
+            }
+
+            /* Skip non-0x20 packets (e.g. stale register responses). */
+            if (ev_xferred < 6 || ev_buf[0] != ARC_OPCODE_EVENT) {
+                LDBG(ctx, "arc_transmit: EP0x81 non-event skip "
+                     "(opcode=0x%02X len=%lu)\n",
+                     ev_xferred > 0 ? ev_buf[0] : 0xFFu, ev_xferred);
+                continue;
+            }
+
+            {
+                uint8_t b4      = ev_buf[4];
+                ULONG   elapsed = (ULONG)(GetTickCount64() - ack_start);
+                LDBG(ctx, "arc_transmit: TX-event b4=0x%02X (+%lu ms)\n",
+                     b4, elapsed);
+                if (b4 == 0x03) {
+                    LDBG(ctx, "arc_transmit: ACK (b4=0x03) -> ARC_OK\n");
+                    r = ARC_OK;
+                } else if (b4 == 0x01) {
+                    LINFO(ctx, "arc_transmit: no ACK (b4=0x01) -> ARC_NOT_ACKED\n");
+                    r = ARC_NOT_ACKED;
+                } else {
+                    LINFO(ctx, "arc_transmit: TX-event b4=0x%02X (unknown) -> ARC_OK\n",
+                          b4);
+                    r = ARC_OK;
+                }
+                goto done;
             }
         }
-        Sleep(ARC_ACK_POLL_INTERVAL_MS);
     }
-    LINFO(ctx, "arc_transmit: TMA not set in %u ms -> ARC_NOT_ACKED\n",
-          ARC_ACK_POLL_BUDGET_MS);
-    r = ARC_NOT_ACKED;
 
 done:
     LeaveCriticalSection(&ctx->lock);
