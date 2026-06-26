@@ -101,10 +101,28 @@ add_executable(test_txevent src/test_txevent.c)
 target_link_libraries(test_txevent arcnet)
 
 # ---------------------------------------------------------
-# test_chipreset: isolated COM20022 RST bit test
+# test_chipreset: arc_shutdown() integration test
 # ---------------------------------------------------------
 add_executable(test_chipreset src/test_chipreset.c)
 target_link_libraries(test_chipreset arcnet)
+
+# ---------------------------------------------------------
+# test_rstlight: isolated RST light-effect measurement
+# ---------------------------------------------------------
+add_executable(test_rstlight src/test_rstlight.c)
+target_link_libraries(test_rstlight arcnet)
+
+# ---------------------------------------------------------
+# test_closequiet: functional silence after close vs shutdown
+# ---------------------------------------------------------
+add_executable(test_closequiet src/test_closequiet.c)
+target_link_libraries(test_closequiet arcnet)
+
+# ---------------------------------------------------------
+# test_b4survey: raw EP0x81 b4 field survey (ACK bit mapping)
+# ---------------------------------------------------------
+add_executable(test_b4survey src/test_b4survey.c)
+target_link_libraries(test_b4survey arcnet)
 
 # ---------------------------------------------------------
 # MSVC compile options
@@ -123,6 +141,9 @@ if(MSVC)
     target_compile_options(test_txloop         PRIVATE /W3)
     target_compile_options(test_txevent        PRIVATE /W3)
     target_compile_options(test_chipreset      PRIVATE /W3)
+    target_compile_options(test_rstlight       PRIVATE /W3)
+    target_compile_options(test_closequiet     PRIVATE /W3)
+    target_compile_options(test_b4survey       PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

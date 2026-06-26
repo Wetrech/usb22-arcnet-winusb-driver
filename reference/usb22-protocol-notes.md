@@ -405,30 +405,57 @@ byte4 = XX     ← TX outcome indicator
 byte5 = 0x00
 ```
 
-### byte4 values (verified, 2-node setup, 5/5 consistent each)
+### byte4 (b4) bit structure — VERIFIED (test_b4survey, 3 scenarios, 20 TX each)
 
-| Scenario | b4 | Meaning |
-|----------|----|---------|
-| node1 → node2 (receiver ALIVE, ACK expected) | `0x03` | ACK received — TX delivered |
-| node1 → node5 (receiver DEAD, no ACK)        | `0x01` | no ACK — RECON / not delivered |
+b4 encodes two independent fields:
 
-Previously observed (UPDATE 8, RECON event with no peer):
-| Standalone RECON (no peer attached) | `0x04` | network reconfiguration |
+```
+bit0 (0x01): TX-complete flag
+             1 = this event belongs to our TX (act on it)
+             0 = saf RECON / other network event (skip, keep waiting)
 
-### b4 semantics — partial, 2-node only
+bit1 (0x02): ACK flag  (valid only when bit0 = 1)
+             1 = ACK received from destination
+             0 = no ACK (destination absent or didn't respond)
 
-Full semantics of byte4 are **not confirmed** beyond a 2-node setup.  b4 may encode
-node count or additional status bits.  Known reliable values:
-- `0x03` → ACK received → ARC_OK
-- `0x01` → no ACK → ARC_NOT_ACKED
-- `0x04` → RECON → ARC_NOT_ACKED (existing behaviour)
-- other  → unknown; log and treat as ARC_OK until more data
+bit2 (0x04): RECON side-info
+             1 = network reconfiguration occurred alongside this TX
+             does NOT affect ACK decision
+```
 
-## Implementation
+Verified combinations:
 
-`arc_transmit(waitAck=true)` now reads EP0x81 (up to ARC_ACK_EVENT_TIMEOUT_MS = 200 ms)
-instead of polling reg0.  The read loop skips non-0x20 packets and exits on the first
-0x20 event.  Result: deterministic, race-free ACK detection.
+| b4   | bin | bit0 | bit1 | bit2 | Scenario | Meaning |
+|------|-----|------|------|------|----------|---------|
+| 0x01 | 001 | 1    | 0    | 0    | node→nonexistent | TX-complete, no ACK |
+| 0x03 | 011 | 1    | 1    | 0    | node→alive      | TX-complete, ACK |
+| 0x04 | 100 | 0    | 0    | 1    | standalone RECON | not TX-complete → skip |
+| 0x05 | 101 | 1    | 0    | 1    | TX + RECON      | TX-complete, no ACK |
+| 0x07 | 111 | 1    | 1    | 1    | TX + ACK + RECON | TX-complete, ACK |
 
-Timing: TX-complete event arrives within ~5–15 ms of WritePipe returning.  No sleep
-required between TX and first read.
+### 3-scenario evidence (test_b4survey, bit1 distribution)
+
+| Scenario | Description | bit1 set / 20 TX |
+|----------|-------------|-----------------|
+| A — ALIVE       | node1 → node2 (open+init, chip on bus) | **20/20** |
+| B — NO-RECEIVER | node1 → node5 (non-existent)           | **0/20**  |
+| C — CHIP-ALIVE  | node1 → node2 (arc_close'd, chip still on bus, HW ACK reflex) | **20/20** |
+
+bit1 is the clean ACK discriminator regardless of bit2 or other flags.
+
+Note: arc_close does NOT pull the chip off the ARCNET bus — the COM20022 chip
+continues to respond with hardware ACK (bit1=1) even after the host software closes
+the USB handle.  Only the data path (EP0x86 receive) stops.
+
+## Implementation (updated — UPDATE 11)
+
+`arc_transmit(waitAck=true)` reads EP0x81 in a loop (up to ARC_ACK_EVENT_TIMEOUT_MS):
+- Skip non-0x20 packets (stale register responses).
+- Skip 0x20 events where **bit0 = 0** (RECON/other, not our TX-complete).
+- On first 0x20 event with **bit0 = 1** (TX-complete): check bit1 for ACK.
+  - bit1 = 1 → ARC_OK
+  - bit1 = 0 → ARC_NOT_ACKED
+
+No exact b4 value comparisons.  Bit-mask only.  Correct for any b4 combination.
+
+Timing: TX-complete event arrives within ~5–15 ms of WritePipe returning.

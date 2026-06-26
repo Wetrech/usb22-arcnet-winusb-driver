@@ -184,9 +184,10 @@ ARCNET_API arc_result_t arc_register(arc_ctx_t *ctx, bool bWrite,
  *              (UPDATE 9: long-frame format verified at len=370; boundary
  *               values 254..256 are unconfirmed — avoid if possible.)
  *   waitAck  : if true, waits up to ARC_ACK_EVENT_TIMEOUT_MS for the
- *              TX-complete event on EP0x81 (UPDATE 10); returns ARC_OK if
- *              b4=0x03 (ACK) or ARC_NOT_ACKED if b4=0x01 (no ACK) or
- *              timeout.  No reg0/TMA polling — event-driven.
+ *              TX-complete event on EP0x81 (UPDATE 10/11); b4 bit mask:
+ *              bit0=TX-complete flag (skip if 0 = RECON/other),
+ *              bit1=ACK.  ARC_OK if ACK, ARC_NOT_ACKED if no-ACK/timeout.
+ *              No reg0/TMA polling -- event-driven, race-free.
  *              if false, returns ARC_OK as soon as the USB write succeeds
  *              (higher throughput, no delivery confirmation).
  *   Returns ARC_OK        packet sent (and ACKed when waitAck=true).

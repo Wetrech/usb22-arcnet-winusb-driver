@@ -849,12 +849,15 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         r = ARC_OK; goto done;
     }
 
-    /* Event-driven ACK detection (UPDATE 10).
+    /* Event-driven ACK detection (UPDATE 10, refined UPDATE 11).
      * After the frame is written to EP0x02, the device firmware pushes a
-     * 0x20 TX-complete event on EP0x81.
-     *   b4=0x03: ACK received (observed, 2-node setup)
-     *   b4=0x01: no ACK / RECON (observed, 2-node setup)
-     * Full b4 semantics for larger networks not yet verified. */
+     * 0x20 TX-complete event on EP0x81.  b4 bit structure (verified,
+     * 3-scenario test_b4survey):
+     *   bit0 (0x01): TX-complete flag -- 1=this event is for our TX,
+     *                0=saf RECON/other (skip, keep waiting)
+     *   bit1 (0x02): ACK -- 1=ACK received, 0=no ACK
+     *   bit2 (0x04): RECON side-info -- does NOT affect ACK decision
+     * Examples: 0x03=TX+ACK, 0x07=TX+ACK+RECON, 0x01=TX+noACK, 0x04=RECON(skip) */
     {
         BYTE      ev_buf[ARC_EP_EVT_MAXPACKET];
         ULONG     ev_xferred;
@@ -910,18 +913,22 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
             {
                 uint8_t b4      = ev_buf[4];
                 ULONG   elapsed = (ULONG)(GetTickCount64() - ack_start);
-                LDBG(ctx, "arc_transmit: TX-event b4=0x%02X (+%lu ms)\n",
+                LDBG(ctx, "arc_transmit: 0x20 event b4=0x%02X (+%lu ms)\n",
                      b4, elapsed);
-                if (b4 == 0x03) {
-                    LDBG(ctx, "arc_transmit: ACK (b4=0x03) -> ARC_OK\n");
+
+                /* bit0=0: saf RECON / other -- not our TX-complete, skip */
+                if (!(b4 & 0x01)) {
+                    LDBG(ctx, "arc_transmit: b4=0x%02X bit0=0 (RECON/other) skip\n", b4);
+                    continue;
+                }
+
+                /* bit0=1: TX-complete event for our frame */
+                if (b4 & 0x02) {
+                    LDBG(ctx, "arc_transmit: b4=0x%02X TX-complete ACK -> ARC_OK\n", b4);
                     r = ARC_OK;
-                } else if (b4 == 0x01) {
-                    LINFO(ctx, "arc_transmit: no ACK (b4=0x01) -> ARC_NOT_ACKED\n");
-                    r = ARC_NOT_ACKED;
                 } else {
-                    LINFO(ctx, "arc_transmit: TX-event b4=0x%02X (unknown) -> ARC_OK\n",
-                          b4);
-                    r = ARC_OK;
+                    LINFO(ctx, "arc_transmit: b4=0x%02X TX-complete no-ACK -> ARC_NOT_ACKED\n", b4);
+                    r = ARC_NOT_ACKED;
                 }
                 goto done;
             }
