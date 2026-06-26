@@ -101,6 +101,12 @@ add_executable(test_txevent src/test_txevent.c)
 target_link_libraries(test_txevent arcnet)
 
 # ---------------------------------------------------------
+# test_chipreset: isolated COM20022 RST bit test
+# ---------------------------------------------------------
+add_executable(test_chipreset src/test_chipreset.c)
+target_link_libraries(test_chipreset arcnet)
+
+# ---------------------------------------------------------
 # MSVC compile options
 # ---------------------------------------------------------
 if(MSVC)
@@ -116,6 +122,7 @@ if(MSVC)
     target_compile_options(test_bigframe       PRIVATE /W3)
     target_compile_options(test_txloop         PRIVATE /W3)
     target_compile_options(test_txevent        PRIVATE /W3)
+    target_compile_options(test_chipreset      PRIVATE /W3)
     target_compile_options(arcnet_scan  PRIVATE /W3)
     target_compile_options(winusb_probe PRIVATE /W3)
 endif()

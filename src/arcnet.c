@@ -365,6 +365,32 @@ void arc_close(arc_ctx_t *ctx)
 }
 
 /* =======================================================================
+ * arc_shutdown
+ * ===================================================================== */
+arc_result_t arc_shutdown(arc_ctx_t *ctx)
+{
+    uint8_t rst;
+    arc_result_t r;
+
+    if (!ctx) return ARC_ERR_OPEN;
+
+    /* Best-effort RST: arc_register checks device_gone internally and
+     * returns ARC_ERR_DEVICE_GONE immediately if the device is gone. */
+    rst = 0x80u;  /* COM20022 reg0 bit7 = RST (software reset) */
+    r = arc_register(ctx, true, 0, &rst);
+    if (r == ARC_OK) {
+        LINFO(ctx, "arc_shutdown: RST written -> node off ARCNET bus\n");
+        Sleep(50u);  /* allow RECON to propagate before USB teardown */
+    } else {
+        LINFO(ctx, "arc_shutdown: RST skipped (%s) -> close anyway\n",
+              arc_result_str(r));
+    }
+
+    arc_close(ctx);  /* releases USB handles, frees ctx */
+    return ARC_OK;
+}
+
+/* =======================================================================
  * write_cmd  --  internal; caller must hold ctx->lock.
  * ===================================================================== */
 static arc_result_t write_cmd(arc_ctx_t *ctx, const BYTE *cmd, ULONG len)

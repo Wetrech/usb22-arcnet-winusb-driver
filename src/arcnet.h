@@ -231,8 +231,19 @@ ARCNET_API arc_result_t arc_reopen(arc_ctx_t *ctx);
 
 /* Close device, release all resources, and free the context.
  * If arc_listen_start() was called, stops the listener thread first.
+ * Does NOT send any command to the chip — the node stays on the ARCNET bus.
+ * Use for error paths, device_gone recovery, and internal teardown.
  * Safe to call with NULL. After this call the pointer is invalid. */
 ARCNET_API void arc_close(arc_ctx_t *ctx);
+
+/* Graceful shutdown: drop the node from the ARCNET bus before closing.
+ * Writes RST (reg0 bit7 = 0x80) to the COM20022, waits 50 ms for the
+ * RECON to propagate, then calls arc_close().
+ * If the device is already gone (arc_reopen not yet called), RST is
+ * skipped automatically and arc_close() is called directly.
+ * Use for the "Close" button / normal program exit.
+ * Always returns ARC_OK (RST errors are best-effort; close always runs). */
+ARCNET_API arc_result_t arc_shutdown(arc_ctx_t *ctx);
 
 /* -----------------------------------------------------------------------
  * Received-packet descriptor (used by the async listener API below)

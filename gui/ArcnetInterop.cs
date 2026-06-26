@@ -118,6 +118,11 @@ internal static class ArcnetNative
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void arc_close(IntPtr ctx);
 
+    // Writes RST (reg0=0x80) to drop the node from the bus, waits 50 ms,
+    // then calls arc_close().  Always returns ArcResult.Ok.
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ArcResult arc_shutdown(IntPtr ctx);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void arc_set_log_level(IntPtr ctx, ArcLogLevel level);
 
@@ -260,6 +265,20 @@ public sealed class ArcnetDevice : IDisposable
             ArcnetNative.arc_close(_ctx);
             _ctx = IntPtr.Zero;
         }
+    }
+
+    // Graceful shutdown: writes RST to drop the node from the ARCNET bus
+    // (light goes off), waits 50 ms, then releases the USB handles.
+    // Use this for the "Close" / exit button; use Close() for error paths.
+    public ArcResult Shutdown()
+    {
+        if (_ctx == IntPtr.Zero) return ArcResult.Ok;
+        ArcResult r = ArcnetNative.arc_shutdown(_ctx);
+        _ctx = IntPtr.Zero;
+        _logCbRef  = null;
+        _recvCbRef = null;
+        _disposed  = true;
+        return r;
     }
 
     public void Dispose()
