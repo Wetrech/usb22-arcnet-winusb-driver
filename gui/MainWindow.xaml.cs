@@ -21,10 +21,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded  += (_, _) => CihazlariTara();
-        Closing += (_, _) =>
+        Closing += async (_, e) =>
         {
+            e.Cancel = true;
+            // Stop any active listeners before closing so background tasks exit cleanly.
+            var stops = _acikCihazlar.Select(cb => cb.DinlemeDurdurAsync()).ToArray();
+            await Task.WhenAll(stops);
             foreach (var cb in _acikCihazlar) cb.Dispose();
             _acikCihazlar.Clear();
+            Application.Current.Shutdown();
         };
     }
 
@@ -88,7 +93,6 @@ public partial class MainWindow : Window
 
         void GuncelleDurum()
         {
-            // PropertyChanged always fires on the UI thread in this app — update directly.
             rozetMetin.Text       = cb.DurumMetin;
             rozet.Background      = cb.DurumArka;
             rozetMetin.Foreground = cb.DurumYazi;
@@ -138,7 +142,6 @@ public partial class MainWindow : Window
             MinWidth = 70,
         };
         acBtn.Click += async (_, _) => await AcVeInitIsle(cb, acBtn, nodeBox);
-        // kapatBtn.Click is assigned after canliTimer/statusTimer/okumaDevam are declared (below)
 
         var kontrolSatiri = new WrapPanel { Orientation = Orientation.Horizontal };
         kontrolSatiri.Children.Add(rozet);
@@ -151,10 +154,6 @@ public partial class MainWindow : Window
         var (regRows, guncelleRegs) = RegPaneliOlustur();
 
         // ── Ağ durumu rozeti ─────────────────────────────────────────
-        // Yorumlar gözleme dayalı (datasheet'ten doğrulanmadı):
-        //   bit5 (0x20) set  → node ağa katılmış / token görüyor (gözlemledik)
-        //   0x00             → ağ aktivitesi yok
-        //   diğer non-zero  → geçiş / belirsiz durum
         var agMetin = new TextBlock
         {
             Text              = "— henüz okunmadı",
@@ -211,7 +210,6 @@ public partial class MainWindow : Window
             agMetin.Foreground = new SolidColorBrush(yazi);
         }
 
-        // Unified update: register table + network badge + main status badge
         void GuncelleHepsi(byte[] vals)
         {
             guncelleRegs(vals);
@@ -267,8 +265,6 @@ public partial class MainWindow : Window
             finally { okumaDevam = false; }
         };
 
-        // Status timer (1 s, always-on after init OK) — shares okumaDevam with canliTimer
-        // so they never overlap on the USB bus.
         var statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         statusTimer.Tick += async (_, _) =>
         {
@@ -282,7 +278,10 @@ public partial class MainWindow : Window
             finally { okumaDevam = false; }
         };
 
-        // Kapat: stop timers first, wait for any in-flight read, then Shutdown
+        // ── Alım paneli (Aşama 4) ────────────────────────────────────
+        var (alimBorder, alimAcikMiDegisti) = AlimPaneliOlustur(cb);
+
+        // Kapat: stop listener first, then stop timers, then close device
         kapatBtn.Click += async (_, _) =>
         {
             canliTimer.Stop();
@@ -293,7 +292,7 @@ public partial class MainWindow : Window
             await KapatIsleAsync(cb, acBtn, nodeBox);
         };
 
-        // Header: title + buttons right-aligned
+        // ── Header: title + buttons right-aligned ─────────────────────
         var regBtnStrip = new StackPanel { Orientation = Orientation.Horizontal };
         regBtnStrip.Children.Add(okuBtn);
         regBtnStrip.Children.Add(canliBtn);
@@ -326,13 +325,25 @@ public partial class MainWindow : Window
             Margin          = new Thickness(0, 12, 0, 0),
             Padding         = new Thickness(12, 10, 12, 10),
             Child           = regInner,
-            IsEnabled       = false,   // enabled only after arc_open
+            IsEnabled       = false,
         };
 
         // ── Transmit paneli ───────────────────────────────────────────
         var transmitBorder = TransmitPaneliOlustur(cb);
 
+        // ── Cihaz yolu etiketi ────────────────────────────────────────
+        var pathLabel = new TextBlock
+        {
+            Text         = cb.DevicePath,
+            FontFamily   = new FontFamily("Consolas"),
+            FontSize     = 10,
+            Foreground   = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86)),
+            TextWrapping = TextWrapping.Wrap,
+            Margin       = new Thickness(0, 0, 0, 12),
+        };
+
         // ── PropertyChanged: rozet + panels + live status timer ─────────
+        // Registered here so all locals (regBorder, transmitBorder) are in scope.
         cb.PropertyChanged += (_, ea) =>
         {
             GuncelleDurum();
@@ -343,6 +354,7 @@ public partial class MainWindow : Window
                     bool acik = cb.AcikMi;
                     regBorder.IsEnabled      = acik;
                     transmitBorder.IsEnabled = acik;
+                    alimAcikMiDegisti(acik);
                     if (!acik)
                     {
                         canliTimer.Stop();
@@ -366,17 +378,6 @@ public partial class MainWindow : Window
         };
         GuncelleDurum();
 
-        // ── Cihaz yolu etiketi ────────────────────────────────────────
-        var pathLabel = new TextBlock
-        {
-            Text         = cb.DevicePath,
-            FontFamily   = new FontFamily("Consolas"),
-            FontSize     = 10,
-            Foreground   = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86)),
-            TextWrapping = TextWrapping.Wrap,
-            Margin       = new Thickness(0, 0, 0, 12),
-        };
-
         // ── İçerik grid ──────────────────────────────────────────────
         var grid = new Grid { Margin = new Thickness(16) };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -388,19 +389,176 @@ public partial class MainWindow : Window
         Grid.SetRow(kontrolSatiri,  1);
         Grid.SetRow(regBorder,      2);
         Grid.SetRow(transmitBorder, 3);
+        Grid.SetRow(alimBorder,     4);
         grid.Children.Add(pathLabel);
         grid.Children.Add(kontrolSatiri);
         grid.Children.Add(regBorder);
         grid.Children.Add(transmitBorder);
+        grid.Children.Add(alimBorder);
 
         return new TabItem { Header = cb.KisaAd, Content = grid, Tag = cb };
+    }
+
+    // ── Alım paneli builder (Aşama 4) ────────────────────────────
+    //
+    // Returns the panel Border and a delegate that must be called
+    // on the UI thread whenever cb.AcikMi changes.
+
+    private (Border panel, Action<bool> acikMiDegisti) AlimPaneliOlustur(CihazBaglanti cb)
+    {
+        SolidColorBrush C(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
+        var ff   = new FontFamily("Segoe UI");
+        var mono = new FontFamily("Consolas");
+        var wh   = C(0xCD, 0xD6, 0xF4);
+        var dim  = C(0x6C, 0x70, 0x86);
+        var surf = C(0x31, 0x32, 0x44);
+
+        // ── Paket listesi ─────────────────────────────────────────
+        var listBox = new ListBox
+        {
+            FontFamily                         = mono,
+            FontSize                           = 11,
+            Background                         = C(0x0A, 0x0A, 0x14),
+            Foreground                         = wh,
+            BorderThickness                    = new Thickness(1),
+            BorderBrush                        = C(0x31, 0x32, 0x44),
+            MinHeight                          = 80,
+            HorizontalContentAlignment         = HorizontalAlignment.Stretch,
+        };
+        ScrollViewer.SetHorizontalScrollBarVisibility(listBox, ScrollBarVisibility.Auto);
+        VirtualizingPanel.SetIsVirtualizing(listBox, true);
+
+        // ── Butonlar ──────────────────────────────────────────────
+        var dinleBtn = new Button
+        {
+            Content  = "▶  Dinlemeyi Başlat",
+            Style    = (Style)FindResource("ScanButton"),
+            MinWidth = 160,
+            Margin   = new Thickness(0, 0, 8, 0),
+        };
+        var temizleBtn = new Button
+        {
+            Content  = "Temizle",
+            Style    = (Style)FindResource("RefreshButton"),
+            MinWidth = 70,
+        };
+
+        // ── Header ───────────────────────────────────────────────
+        var baslik = new TextBlock
+        {
+            Text              = "Paket Akışı",
+            FontFamily        = ff,
+            FontSize          = 11,
+            FontWeight        = FontWeights.SemiBold,
+            Foreground        = C(0x89, 0xB4, 0xFA),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var sayacMetin = new TextBlock
+        {
+            FontFamily        = ff,
+            FontSize          = 10,
+            Foreground        = dim,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin            = new Thickness(8, 0, 0, 0),
+        };
+        var baslikPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        baslikPanel.Children.Add(baslik);
+        baslikPanel.Children.Add(sayacMetin);
+
+        var btnStrip = new StackPanel { Orientation = Orientation.Horizontal };
+        btnStrip.Children.Add(dinleBtn);
+        btnStrip.Children.Add(temizleBtn);
+
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        DockPanel.SetDock(btnStrip, Dock.Right);
+        header.Children.Add(btnStrip);
+        header.Children.Add(baslikPanel);
+
+        var ic = new DockPanel();
+        DockPanel.SetDock(header, Dock.Top);
+        ic.Children.Add(header);
+        ic.Children.Add(listBox);
+
+        var border = new Border
+        {
+            Background      = C(0x11, 0x11, 0x1B),
+            BorderBrush     = C(0x31, 0x32, 0x44),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(6),
+            Margin          = new Thickness(0, 8, 0, 0),
+            Padding         = new Thickness(12, 10, 12, 10),
+            Child           = ic,
+            IsEnabled       = false,
+        };
+
+        int paketSayaci = 0;
+
+        void EkleItem(string metin)
+        {
+            // Must be called on UI thread via Dispatcher.BeginInvoke.
+            listBox.Items.Add(metin);
+            if (listBox.Items.Count > 200)
+                listBox.Items.RemoveAt(0);
+            listBox.ScrollIntoView(listBox.Items[^1]);
+            paketSayaci++;
+            sayacMetin.Text = $"({paketSayaci} paket)";
+        }
+
+        // ── Dinle / Durdur toggle ─────────────────────────────────
+        dinleBtn.Click += async (_, _) =>
+        {
+            if (!cb.DinlemeMi)
+            {
+                dinleBtn.IsEnabled = false;
+                bool ok = cb.DinlemeBaslat(
+                    onPaket: line => Dispatcher.BeginInvoke(() => EkleItem(line)),
+                    onHata:  msg  => Dispatcher.BeginInvoke(() =>
+                    {
+                        EkleItem($"[!] {msg}");
+                        dinleBtn.Content    = "▶  Dinlemeyi Başlat";
+                        dinleBtn.IsEnabled  = true;
+                    })
+                );
+                if (ok)
+                    dinleBtn.Content = "■  Durdur";
+                dinleBtn.IsEnabled = true;
+            }
+            else
+            {
+                dinleBtn.IsEnabled = false;
+                await cb.DinlemeDurdurAsync();
+                dinleBtn.Content   = "▶  Dinlemeyi Başlat";
+                dinleBtn.IsEnabled = true;
+            }
+        };
+
+        temizleBtn.Click += (_, _) =>
+        {
+            listBox.Items.Clear();
+            paketSayaci = 0;
+            sayacMetin.Text = "";
+        };
+
+        // Called from PropertyChanged handler when AcikMi changes.
+        void AcikMiDegisti(bool acik)
+        {
+            border.IsEnabled = acik;
+            if (!acik)
+            {
+                // Device closed — reset button state (DinlemeDurdurAsync already called
+                // in KapatIsleAsync before arc_close, so task is already stopped).
+                dinleBtn.Content   = "▶  Dinlemeyi Başlat";
+                dinleBtn.IsEnabled = true;
+            }
+        }
+
+        return (border, AcikMiDegisti);
     }
 
     // ── Register panel builder ────────────────────────────────────
 
     private static (UIElement rows, Action<byte[]> guncelle) RegPaneliOlustur()
     {
-        // Register names for COM20022
         string[] ad = { "Reg0 STATUS", "Reg1", "Reg2", "Reg3", "Reg4", "Reg5", "Reg6", "Reg7" };
 
         var hexBlocks = new TextBlock[8];
@@ -459,8 +617,6 @@ public partial class MainWindow : Window
             {
                 bitDetail = new TextBlock
                 {
-                    // Named bits: bit7=RST (confirmed), bit6=RI? (uncertain),
-                    // bit2=RECON? (uncertain), bit1=TMA (confirmed), bit0=TA (confirmed)
                     Text         = "  → bit7(RST)=?  bit6(RI?)=?  bit2(RECON?)=?  bit1(TMA)=?  bit0(TA)=?",
                     FontFamily   = new FontFamily("Consolas"),
                     FontSize     = 10,
@@ -491,9 +647,6 @@ public partial class MainWindow : Window
 
     private static string Reg0BitDetail(byte v)
     {
-        // Named bits in COM20022 STATUS register.
-        // Confident: TA (bit0), TMA (bit1), RST (bit7).
-        // Uncertain (marked ?): RI? (bit6), RECON? (bit2) — verify against your datasheet.
         var named = new (int bit, string name)[]
         {
             (7, "RST"), (6, "RI?"), (2, "RECON?"), (1, "TMA"), (0, "TA"),
@@ -511,16 +664,14 @@ public partial class MainWindow : Window
 
     private Border TransmitPaneliOlustur(CihazBaglanti cb)
     {
-        // Shorthand for creating a SolidColorBrush (not frozen — per-tab, low count)
         SolidColorBrush C(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
         var ff   = new FontFamily("Segoe UI");
         var mono = new FontFamily("Consolas");
-        var wh   = C(0xCD, 0xD6, 0xF4); // text
-        var dim  = C(0x6C, 0x70, 0x86); // dim text
-        var surf = C(0x31, 0x32, 0x44); // surface0
-        var brd  = C(0x58, 0x5B, 0x70); // border colour
+        var wh   = C(0xCD, 0xD6, 0xF4);
+        var dim  = C(0x6C, 0x70, 0x86);
+        var surf = C(0x31, 0x32, 0x44);
+        var brd  = C(0x58, 0x5B, 0x70);
 
-        // ── Hedef node ────────────────────────────────────────────
         var hedefBox = new TextBox
         {
             Text = "2", Width = 52, FontFamily = ff, FontSize = 12,
@@ -529,7 +680,6 @@ public partial class MainWindow : Window
             Margin = new Thickness(6, 0, 14, 0),
         };
 
-        // ── Mod: Metin / Hex ──────────────────────────────────────
         var metinRadio = new RadioButton
         {
             Content = "Metin", IsChecked = true,
@@ -543,7 +693,6 @@ public partial class MainWindow : Window
             FontFamily = ff, FontSize = 12, Margin = new Thickness(0, 0, 16, 0),
         };
 
-        // ── ACK onay kutusu ───────────────────────────────────────
         var ackCheck = new CheckBox
         {
             Content = "ACK Bekle", IsChecked = true,
@@ -551,7 +700,6 @@ public partial class MainWindow : Window
             FontFamily = ff, FontSize = 12,
         };
 
-        // ── Ayarlar satırı ────────────────────────────────────────
         var ayarSatiri = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
         ayarSatiri.Children.Add(new TextBlock { Text = "Hedef:", Foreground = wh, FontFamily = ff, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         ayarSatiri.Children.Add(hedefBox);
@@ -559,7 +707,6 @@ public partial class MainWindow : Window
         ayarSatiri.Children.Add(hexRadio);
         ayarSatiri.Children.Add(ackCheck);
 
-        // ── Veri girişi ───────────────────────────────────────────
         var veriBox = new TextBox
         {
             Text = "Merhaba ARCNET",
@@ -575,7 +722,6 @@ public partial class MainWindow : Window
             FontFamily = ff, FontSize = 9, Foreground = dim, Margin = new Thickness(0, 2, 0, 0),
         };
 
-        // ── Sonuç rozeti ──────────────────────────────────────────
         var sonucMetin = new TextBlock
         {
             FontFamily = ff, FontSize = 11, FontWeight = FontWeights.SemiBold,
@@ -596,7 +742,6 @@ public partial class MainWindow : Window
             sonucRozet.Visibility = Visibility.Visible;
         }
 
-        // ── Gönder butonu ─────────────────────────────────────────
         var gonderBtn = new Button
         {
             Content = "⬆  Gönder", Style = (Style)FindResource("TestButton"), MinWidth = 100,
@@ -605,10 +750,8 @@ public partial class MainWindow : Window
         gonderSatiri.Children.Add(gonderBtn);
         gonderSatiri.Children.Add(sonucRozet);
 
-        // ── Gönder click ──────────────────────────────────────────
         gonderBtn.Click += async (_, _) =>
         {
-            // Validate destination (1-255; 0 = broadcast, unsupported here)
             if (!byte.TryParse(hedefBox.Text.Trim(), out byte dest) || dest == 0)
             {
                 GosterSonuc("✘ Geçersiz hedef (1-255)",
@@ -616,7 +759,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Parse data according to selected mode
             byte[] data;
             if (metinRadio.IsChecked == true)
             {
@@ -653,8 +795,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // 254-256 dead zone: ARCNET packet sizes in this range are unreliable;
-            // warn but allow the user to try anyway.
             bool deadZone = data.Length >= 254 && data.Length <= 256;
             if (deadZone)
                 GosterSonuc($"⚠ {data.Length} bayt (254-256 ölü bölge, güvenilmez) — yine de deneniyor…",
@@ -665,7 +805,6 @@ public partial class MainWindow : Window
 
             bool waitAck = ackCheck.IsChecked == true;
 
-            // Log outgoing packet
             AcLogPanel();
             string ozet = data.Length <= 32
                 ? "\"" + new string(data.Select(b => b >= 32 && b < 127 ? (char)b : '.').ToArray()) + "\""
@@ -708,7 +847,6 @@ public partial class MainWindow : Window
             }
         };
 
-        // ── Panel ─────────────────────────────────────────────────
         var baslik = new TextBlock
         {
             Text = "Manuel Gönder",
@@ -749,7 +887,6 @@ public partial class MainWindow : Window
     {
         if (cb.AcikMi) return;
 
-        // Node ID çakışma kontrolü — sadece bu GUI oturumundaki açık cihazlar arasında
         var cakisan = _acikCihazlar.FirstOrDefault(o => o != cb && o.AcikMi && o.NodeId == cb.NodeId);
         if (cakisan != null)
         {
@@ -854,8 +991,6 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Kurulum adımları ─────────────────────────────────────────
-
     private async Task<bool> SurucuKurAsync(string driverDir)
     {
         string signPs1 = Path.Combine(driverDir, "sign.ps1");
@@ -879,7 +1014,7 @@ public partial class MainWindow : Window
             $"/add-driver \"{infPath}\" /install",
             driverDir,
             pnpCikti,
-            extraOkCodes: new[] { 259 });   // 259 = zaten güncel (ERROR_NO_MORE_ITEMS)
+            extraOkCodes: new[] { 259 });
 
         if (!ok)
         {
@@ -897,8 +1032,6 @@ public partial class MainWindow : Window
             : "✔  Adım 2 tamamlandı.", BrYesil);
         return true;
     }
-
-    // ── Test: seçili cihaz ───────────────────────────────────────
 
     private async void TestBtn_Click(object sender, RoutedEventArgs e)
     {
@@ -931,8 +1064,6 @@ public partial class MainWindow : Window
             TestBtn.Content = "▶  Seçiliyi Test Et";
         }
     }
-
-    // ── Test: hepsini sırayla ────────────────────────────────────
 
     private async void HepsiniTestBtn_Click(object sender, RoutedEventArgs e)
     {
@@ -980,8 +1111,6 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Tek cihaz test çekirdeği (her ikisi de buraya gelir) ─────
-
     private async Task<bool> TestEtVeGuncelle(CihazSatiri cihaz, string testExe, bool logBaslik)
     {
         if (logBaslik)
@@ -1017,7 +1146,6 @@ public partial class MainWindow : Window
         LogEkle("", BrGri);
         LogEkle("── Sonuç ──────────────────────────────────────", BrGri);
 
-        // Gerçek donanım hatası her zaman başarısız sayılır
         if (hardHata)
         {
             string satir = satirlar.FirstOrDefault(s =>
@@ -1027,7 +1155,6 @@ public partial class MainWindow : Window
             return false;
         }
 
-        // Open veya init başarısız ise cihaza ulaşılamıyor
         if (!openOk || !initOk)
         {
             if (!openOk)
@@ -1037,15 +1164,12 @@ public partial class MainWindow : Window
             return false;
         }
 
-        // Open + init OK → cihaz çalışıyor. Transmit sonucu sadece bilgi amaçlı.
         bool transmitAck    = satirlar.Any(s => s.Contains("arc_transmit: ARC_OK"));
         bool transmitNotAck = satirlar.Any(s => s.Contains("ARC_NOT_ACKED"));
         bool netBusy        = satirlar.Any(s => s.Contains("ARC_ERR_NET_BUSY"));
 
         if (transmitAck)
-        {
             LogEkle("✔  Cihaz çalışıyor (paket ACK'lendi)", BrYesil);
-        }
         else if (transmitNotAck)
         {
             LogEkle("✔  Cihaz çalışıyor", BrYesil);
@@ -1057,9 +1181,8 @@ public partial class MainWindow : Window
             LogEkle("   (ağ geçici meşgul — RECON devam ediyor)", BrSari);
         }
         else
-        {
             LogEkle("✔  Cihaz çalışıyor (transmit durumu bilinmiyor)", BrYesil);
-        }
+
         return true;
     }
 
@@ -1092,8 +1215,6 @@ public partial class MainWindow : Window
         }
         return null;
     }
-
-    // ── Ortak process çalıştırıcı ────────────────────────────────
 
     private async Task<bool> KomutCalistirAsync(
         string exe, string args, string calismaDir,
@@ -1236,8 +1357,6 @@ public partial class MainWindow : Window
         return b2;
     }
 
-    // ── Kurulum sonrası cihaz durumu ─────────────────────────────
-
     private enum KurulumSonucu { WinUsbHazir, CihazYok, CihazBootloader }
 
     private KurulumSonucu KurulumSonrasiTara()
@@ -1264,8 +1383,6 @@ public partial class MainWindow : Window
         catch { return KurulumSonucu.CihazYok; }
     }
 
-    // ── Driver klasörü bulma ──────────────────────────────────────
-
     private static string? DriverKlasorunuBul()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -1281,8 +1398,6 @@ public partial class MainWindow : Window
         }
         return null;
     }
-
-    // ── Cihaz tarama ─────────────────────────────────────────────
 
     private void CihazlariTara()
     {
@@ -1338,11 +1453,14 @@ public partial class MainWindow : Window
     }
 }
 
-// ── CihazBaglanti — tek ARC cihaz bağlantısı (AŞAMA 1) ───────────
+// ── CihazBaglanti — tek ARC cihaz bağlantısı ─────────────────────
 
 public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 {
-    private ArcnetDevice? _dev;
+    private ArcnetDevice?             _dev;
+    private CancellationTokenSource?  _listenCts;
+    private Task?                     _listenTask;
+    private bool                      _dinlemede;  // re-entry guard
 
     public string DevicePath { get; }
     public string KisaAd     { get; }
@@ -1377,6 +1495,8 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 
     public bool AcikMi => _dev != null;
 
+    public bool DinlemeMi => _dinlemede;
+
     private bool _initTamamlandi;
     public bool InitTamamlandi
     {
@@ -1392,8 +1512,6 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 
     private static string CikarKisaAd(string path)
     {
-        // \\?\usb#vid_0d0b&pid_1002#6&18b4745&0&4#{guid}
-        // segs[2] = "6&18b4745&0&4"  → last two '&' fields = port/instance suffix
         var segs = path.Split('#');
         if (segs.Length >= 3)
         {
@@ -1411,7 +1529,6 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         SetDurum("⌛ Açılıyor…", BrAciyor, BrYaziAciyor);
         try
         {
-            // arc_open is fast; arc_init blocks ~2.5 s → offload
             _dev = new ArcnetDevice(DevicePath, verbose: false);
             OnPropertyChanged(nameof(AcikMi));
 
@@ -1442,8 +1559,6 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         }
     }
 
-    // Transmits data synchronously (call from Task.Run — waitAck can block ~100 ms).
-    // Returns the ArcResult; never throws.
     public async Task<ArcResult> GonderAsync(byte destNode, byte[] data, bool waitAck)
     {
         var dev = _dev;
@@ -1453,8 +1568,6 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         catch                           { return ArcResult.ErrIo; }
     }
 
-    // Reads registers 0-7 synchronously (call from Task.Run to avoid UI freeze).
-    // Returns 8-byte array on success, null on any error.
     public byte[]? RegisterlariOkuSync()
     {
         var dev = _dev;
@@ -1473,8 +1586,105 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         catch { return null; }
     }
 
+    // ── Listen (Aşama 4) ──────────────────────────────────────────
+
+    // Starts arc_listen_start + a C# poll task.
+    // onPaket and onHata are called from a background thread —
+    // callers MUST marshal to the UI thread with Dispatcher.BeginInvoke.
+    // Returns false if already listening or device is not open.
+    public bool DinlemeBaslat(Action<string> onPaket, Action<string> onHata)
+    {
+        if (_dinlemede || _dev == null) return false;
+        _dinlemede = true;
+
+        var dev = _dev;
+        var r   = dev.StartListen();
+        if (r != ArcResult.Ok)
+        {
+            _dinlemede = false;
+            onHata($"arc_listen_start: {ArcnetDevice.ResultString(r)}");
+            return false;
+        }
+
+        _listenCts  = new CancellationTokenSource();
+        var ct      = _listenCts.Token;
+
+        _listenTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    ArcResult pr;
+                    ArcPacket pkt;
+                    try { pr = dev.PollPacket(out pkt); }
+                    catch (ObjectDisposedException) { break; }
+
+                    if (pr == ArcResult.Ok)
+                    {
+                        onPaket(FormatPaket(pkt));
+                    }
+                    else if (pr == ArcResult.NoPacket)
+                    {
+                        await Task.Delay(20, ct);
+                    }
+                    else
+                    {
+                        // IO error or device gone — stop and report.
+                        onHata($"Dinleme durdu ({ArcnetDevice.ResultString(pr)})");
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { /* normal cancellation via Durdur */ }
+            catch (Exception ex) { onHata($"Dinleme hatası: {ex.Message}"); }
+            finally
+            {
+                try { dev.StopListen(); } catch { }
+                _dinlemede = false;
+            }
+        });
+
+        return true;
+    }
+
+    // Cancels the poll task and waits for it to exit cleanly.
+    // Safe to call when not listening (no-op).
+    public async Task DinlemeDurdurAsync()
+    {
+        _listenCts?.Cancel();
+        if (_listenTask != null)
+        {
+            try { await _listenTask.ConfigureAwait(false); } catch { }
+            _listenTask = null;
+        }
+        _listenCts?.Dispose();
+        _listenCts = null;
+        // _dinlemede is reset in the poll task's finally block; ensure it here too.
+        _dinlemede = false;
+    }
+
+    private static string FormatPaket(ArcPacket pkt)
+    {
+        int len   = Math.Clamp(pkt.Len, 0, 508);
+        var stamp = DateTime.Now.ToString("HH:mm:ss.fff");
+        // Show up to 32 hex bytes; truncate longer payloads.
+        var hex = len <= 32
+            ? string.Join(" ", pkt.Data.Take(len).Select(b => $"{b:X2}"))
+            : string.Join(" ", pkt.Data.Take(16).Select(b => $"{b:X2}")) + $" … [{len}B]";
+        var asc = new string(pkt.Data.Take(Math.Min(len, 32))
+            .Select(b => b >= 32 && b < 127 ? (char)b : '.').ToArray());
+        return $"[{stamp}] 0x{pkt.Src:X2}→0x{pkt.Dst:X2}  {len}B  {hex}  |{asc}|";
+    }
+
+    // ── Close ─────────────────────────────────────────────────────
+
     public void Kapat()
     {
+        // Signal the poll task to stop; arc_close (via Shutdown) will
+        // block until the native listen thread exits.
+        _listenCts?.Cancel();
+
         var dev = _dev;
         _dev = null;
         InitTamamlandi = false;
@@ -1485,6 +1695,9 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 
     public async Task<ArcResult> KapatAsync(Action<string>? cLog = null)
     {
+        // Stop listener task first so PollPacket calls don't race with arc_close.
+        await DinlemeDurdurAsync();
+
         var dev = _dev;
         _dev = null;
         InitTamamlandi = false;
