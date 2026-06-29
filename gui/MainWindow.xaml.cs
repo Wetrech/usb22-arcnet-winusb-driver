@@ -15,6 +15,7 @@ namespace WetrechArcnetManager;
 public partial class MainWindow : Window
 {
     private bool _testCalisiyor;
+    private ArcLogLevel _libLogSeviye = ArcLogLevel.Info;
     private readonly List<CihazBaglanti> _acikCihazlar = new();
 
     public MainWindow()
@@ -75,6 +76,9 @@ public partial class MainWindow : Window
 
     private TabItem CihazTabOlustur(CihazBaglanti cb)
     {
+        var disp = Dispatcher;
+        cb.OnLog = (level, msg) => disp.BeginInvoke(() => LogEkleLib(level, cb.KisaAd, msg));
+
         // ── Durum rozeti ─────────────────────────────────────────────
         var rozetMetin = new TextBlock
         {
@@ -901,6 +905,7 @@ public partial class MainWindow : Window
 
         try
         {
+            cb.LogSeviyeAyarla(_libLogSeviye);
             var r = await cb.AcVeInit();
             if (r == ArcResult.Ok)
                 LogEkle($"✔  {cb.KisaAd} → Init OK (node={cb.NodeId})", BrYesil);
@@ -1342,12 +1347,41 @@ public partial class MainWindow : Window
         File.WriteAllText(dlg.FileName, text, System.Text.Encoding.UTF8);
     }
 
+    private void LogEkleLib(ArcLogLevel level, string kisaAd, string msg)
+    {
+        while (LogKutu.Document.Blocks.Count >= 500)
+            LogKutu.Document.Blocks.Remove(LogKutu.Document.Blocks.FirstBlock);
+
+        Brush renk = level switch
+        {
+            ArcLogLevel.Error => BrKirmizi,
+            ArcLogLevel.Info  => BrGri,
+            _                 => BrDebug,
+        };
+        var stamp = DateTime.Now.ToString("HH:mm:ss.fff");
+        LogEkle($"[{stamp}] [{kisaAd}] {msg.TrimEnd()}", renk);
+        AcLogPanel();
+    }
+
+    private void LogSeviyeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _libLogSeviye = LogSeviyeBox.SelectedIndex switch
+        {
+            0 => ArcLogLevel.Error,
+            2 => ArcLogLevel.Debug,
+            _ => ArcLogLevel.Info,
+        };
+        foreach (var cb in _acikCihazlar)
+            cb.LogSeviyeAyarla(_libLogSeviye);
+    }
+
     private static readonly Brush BrBeyaz   = Dondur(0xCD, 0xD6, 0xF4);
     private static readonly Brush BrYesil   = Dondur(0xA6, 0xE3, 0xA1);
     private static readonly Brush BrKirmizi = Dondur(0xF3, 0x8B, 0xA8);
     private static readonly Brush BrSari    = Dondur(0xF9, 0xE2, 0xAF);
     private static readonly Brush BrMavi    = Dondur(0x89, 0xB4, 0xFA);
     private static readonly Brush BrGri     = Dondur(0x6C, 0x70, 0x86);
+    private static readonly Brush BrDebug   = Dondur(0x45, 0x47, 0x5A);
 
     private static SolidColorBrush Dondur(byte r, byte g, byte b)
     {
@@ -1460,6 +1494,9 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
     private CancellationTokenSource?  _listenCts;
     private Task?                     _listenTask;
     private bool                      _dinlemede;  // re-entry guard
+    private ArcLogLevel               _logSeviye = ArcLogLevel.Info;
+
+    public Action<ArcLogLevel, string>? OnLog { get; set; }
 
     public string DevicePath { get; }
     public string KisaAd     { get; }
@@ -1529,6 +1566,11 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         try
         {
             _dev = new ArcnetDevice(DevicePath, verbose: false);
+            if (OnLog != null)
+            {
+                _dev.SetLogLevel(_logSeviye);
+                _dev.SetLogCallback(OnLog);
+            }
             OnPropertyChanged(nameof(AcikMi));
 
             SetDurum("⌛ Init…", BrAciyor, BrYaziAciyor);
@@ -1556,6 +1598,12 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
             SetDurum("✘ Açılamadı", BrHata, BrYaziHata);
             throw;
         }
+    }
+
+    public void LogSeviyeAyarla(ArcLogLevel seviye)
+    {
+        _logSeviye = seviye;
+        try { _dev?.SetLogLevel(seviye); } catch { }
     }
 
     public async Task<ArcResult> GonderAsync(byte destNode, byte[] data, bool waitAck)

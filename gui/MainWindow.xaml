@@ -438,11 +438,27 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               Text="Çıktı Günlüğü"
-                               FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
-                               Foreground="#89B4FA"
-                               VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Çıktı Günlüğü"
+                                   FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#89B4FA"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Text="Kütüphane log:"
+                                   FontFamily="Segoe UI" FontSize="10"
+                                   Foreground="#6C7086"
+                                   VerticalAlignment="Center"
+                                   Margin="16,0,6,0"/>
+                        <ComboBox x:Name="LogSeviyeBox"
+                                  Width="70" VerticalAlignment="Center"
+                                  FontFamily="Segoe UI" FontSize="10"
+                                  Background="#313244" Foreground="#CDD6F4"
+                                  BorderBrush="#585B70"
+                                  SelectionChanged="LogSeviyeBox_SelectionChanged">
+                            <ComboBoxItem Content="ERROR"/>
+                            <ComboBoxItem Content="INFO" IsSelected="True"/>
+                            <ComboBoxItem Content="DEBUG"/>
+                        </ComboBox>
+                    </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <Button x:Name="LogKopyalaBtn"
                                 Content="Kopyala"
