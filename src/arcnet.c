@@ -916,7 +916,7 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                 LDBG(ctx, "arc_transmit: 0x20 event b4=0x%02X (+%lu ms)\n",
                      b4, elapsed);
 
-                /* bit0=0: saf RECON / other -- not our TX-complete, skip */
+                /* bit0=0: RECON / other -- not our TX-complete, skip */
                 if (!(b4 & 0x01)) {
                     LDBG(ctx, "arc_transmit: b4=0x%02X bit0=0 (RECON/other) skip\n", b4);
                     continue;
@@ -992,7 +992,6 @@ static arc_result_t arc_receive_locked(arc_ctx_t *ctx,
                                         ULONG timeout_ms)
 {
     arc_result_t r;
-    BYTE         poll[10];
     BYTE         buf[RX_BUF_SIZE];
     ULONG        xferred;
     DWORD        err;
@@ -1001,29 +1000,13 @@ static arc_result_t arc_receive_locked(arc_ctx_t *ctx,
 
     if (ctx->device_gone) return ARC_ERR_DEVICE_GONE;
 
-    if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
-                               PIPE_TRANSFER_TIMEOUT, sizeof(timeout_ms), &timeout_ms))
-        LERR(ctx, "arc_receive: SetPipePolicy TX_OUT GLE=%lu\n", GetLastError());
+    /* Push-model receive: post a direct read on EP0x86; no EP0x02 poll write.
+     * The original all-zeros EP0x02 write was a reverse-engineered assumption
+     * ("likely" poll, UPDATE 5) that turned out to trigger spurious TX-complete
+     * events on EP0x81, poisoning arc_transmit ACK detection. */
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_RX_IN,
                                PIPE_TRANSFER_TIMEOUT, sizeof(timeout_ms), &timeout_ms))
         LERR(ctx, "arc_receive: SetPipePolicy RX_IN GLE=%lu\n", GetLastError());
-
-    memset(poll, 0x00, sizeof(poll));
-    xferred = 0;
-    ok  = WinUsb_WritePipe(ctx->usb_handle, ARC_EP_TX_OUT,
-                            poll, sizeof(poll), &xferred, NULL);
-    err = GetLastError();
-    if (!ok) {
-        if (is_gone_error(err)) {
-            ctx->device_gone = true;
-            LERR(ctx, "arc_receive: device gone on WritePipe EP0x02 GLE=%lu\n", err);
-            return ARC_ERR_DEVICE_GONE;
-        }
-        LDBG(ctx, "arc_receive: WritePipe EP0x02 GLE=%lu -> flush+NO_PACKET\n", err);
-        pipe_flush(ctx, ARC_EP_TX_OUT);
-        return ARC_NO_PACKET;
-    }
-    LDBG(ctx, "arc_receive: poll wrote %lu bytes to EP0x02\n", xferred);
 
     memset(buf, 0, sizeof(buf));
     xferred = 0;

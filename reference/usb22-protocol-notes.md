@@ -459,3 +459,67 @@ the USB handle.  Only the data path (EP0x86 receive) stops.
 No exact b4 value comparisons.  Bit-mask only.  Correct for any b4 combination.
 
 Timing: TX-complete event arrives within ~5–15 ms of WritePipe returning.
+
+---
+
+# UPDATE 12 — Receive is push-model: EP0x86 direct read, no EP0x02 poll
+
+## Background
+
+UPDATE 5 documented a 10-byte all-zeros exchange on EP0x02/EP0x86 during startup
+and noted it was "likely" the receive-poll mechanism used during operation.  This
+was adopted as the `arc_receive_locked` implementation.
+
+UPDATE 3 explicitly flagged the question as unresolved:
+> *Confirm whether host must issue a poll request per receive, or simply keep a
+> blocking read posted on EP0x86.*
+
+## Root-cause investigation (listen + transmit ACK conflict)
+
+With `arc_listen_start` active, `arc_transmit` was returning `ARC_NOT_ACKED` even
+though the packet reached the destination.  Diagnostic logging (ep81_diag.txt) showed:
+
+- Exactly 1 EP0x81 event per TX, arriving at +0 ms (already queued).
+- With listener active: b4=0x01 (no-ACK) most of the time.
+- Without listener: b4=0x03 (ACK) consistently (20/20 in test_txloop).
+
+The mechanism: `arc_receive_locked` writes 10 all-zeros to EP0x02.  The device
+firmware interprets the frame as a long-frame TX to node 0 (byte1=0x00 = long-frame
+marker, byte2=0x00 → L=512, which is invalid/rejected by ARCNET).  Regardless of
+whether the frame hits the bus, the firmware generates a TX-complete event on EP0x81
+with b4=0x01 (no-ACK — node 0 does not exist).  This stale event sits in the EP0x81
+queue.  When `arc_transmit` subsequently reads EP0x81, it consumes the stale b4=0x01
+first (FIFO), returns `ARC_NOT_ACKED`, and never reads the real b4=0x03 event from
+its own TX.
+
+Side effect (network pollution concern): if the all-zeros write does generate an
+actual ARCNET frame, ~40 spurious TX/s per listening device (25 ms poll cycle) would
+accumulate with multiple devices.  Not confirmed via USBPcap because the root-cause
+fix made the verification moot.
+
+## Fix: push-model receive (EP0x86 direct read)
+
+`arc_receive_locked` was modified to **remove the EP0x02 all-zeros write entirely**
+and post a direct `WinUsb_ReadPipe` on EP0x86 only:
+
+```
+Old: EP0x02 OUT (10B all-zeros) → EP0x86 IN (packet or all-zeros if none)
+New: EP0x86 IN  (blocks until packet arrives or PIPE_TRANSFER_TIMEOUT)
+```
+
+## Verification
+
+- **GUI Phase 4 live receive panel**: packets received correctly in both directions
+  with listener active.
+- **arc_transmit ACK**: b4=0x03 (ARC_OK) with listener active after fix; stale
+  b4=0x01 events no longer appear.
+- **test_multi FULL PASS**: bidirectional synchronous `arc_receive` continues to
+  work — EP0x86 delivers packets without the EP0x02 trigger.
+- No spurious EP0x81 events generated during receive polling.
+
+## Conclusion
+
+The device firmware uses a **push model** for receive: inbound ARCNET frames are
+delivered on EP0x86 IN as they arrive; no EP0x02 poll is required.  The original
+CC driver's all-zeros EP0x02 write was a startup handshake artifact, not a mandatory
+receive-poll protocol.  Confirmed closed: UPDATE 3 open question resolved.
