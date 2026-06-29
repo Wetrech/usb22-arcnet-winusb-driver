@@ -496,10 +496,9 @@ public partial class MainWindow : Window
         void EkleItem(string metin)
         {
             // Must be called on UI thread via Dispatcher.BeginInvoke.
-            listBox.Items.Add(metin);
+            listBox.Items.Insert(0, metin);
             if (listBox.Items.Count > 200)
-                listBox.Items.RemoveAt(0);
-            listBox.ScrollIntoView(listBox.Items[^1]);
+                listBox.Items.RemoveAt(200);
             paketSayaci++;
             sayacMetin.Text = $"({paketSayaci} paket)";
         }
