@@ -57,9 +57,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        foreach (string path in paths)
+        for (int i = 0; i < paths.Length; i++)
         {
-            var cb = new CihazBaglanti(path);
+            var cb = new CihazBaglanti(paths[i]) { NodeId = (byte)Math.Min(i + 1, 255) };
             _acikCihazlar.Add(cb);
             AnaTablar.Items.Add(CihazTabOlustur(cb));
         }
@@ -88,12 +88,10 @@ public partial class MainWindow : Window
 
         void GuncelleDurum()
         {
-            Dispatcher.InvokeAsync(() =>
-            {
-                rozetMetin.Text       = cb.DurumMetin;
-                rozet.Background      = cb.DurumArka;
-                rozetMetin.Foreground = cb.DurumYazi;
-            });
+            // PropertyChanged always fires on the UI thread in this app — update directly.
+            rozetMetin.Text       = cb.DurumMetin;
+            rozet.Background      = cb.DurumArka;
+            rozetMetin.Foreground = cb.DurumYazi;
         }
 
         // ── Node ID girişi ────────────────────────────────────────────
@@ -139,8 +137,8 @@ public partial class MainWindow : Window
             Style    = (Style)FindResource("RefreshButton"),
             MinWidth = 70,
         };
-        acBtn.Click    += async (_, _) => await AcVeInitIsle(cb, acBtn, nodeBox);
-        kapatBtn.Click += (_, _)       => KapatIsle(cb, acBtn, nodeBox);
+        acBtn.Click += async (_, _) => await AcVeInitIsle(cb, acBtn, nodeBox);
+        // kapatBtn.Click is assigned after canliTimer/statusTimer/okumaDevam are declared (below)
 
         var kontrolSatiri = new WrapPanel { Orientation = Orientation.Horizontal };
         kontrolSatiri.Children.Add(rozet);
@@ -213,11 +211,12 @@ public partial class MainWindow : Window
             agMetin.Foreground = new SolidColorBrush(yazi);
         }
 
-        // Unified update: register table + network badge
+        // Unified update: register table + network badge + main status badge
         void GuncelleHepsi(byte[] vals)
         {
             guncelleRegs(vals);
             GuncelleAgDurumu(vals[0]);
+            cb.RaporAgDurumu(vals[0]);
         }
 
         var okuBtn = new Button
@@ -247,7 +246,7 @@ public partial class MainWindow : Window
 
         var canliTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         bool canliAcik  = false;
-        bool canliDevam = false;
+        bool okumaDevam = false;
 
         canliBtn.Click += (_, _) =>
         {
@@ -258,14 +257,40 @@ public partial class MainWindow : Window
 
         canliTimer.Tick += async (_, _) =>
         {
-            if (canliDevam || !cb.AcikMi) return;
-            canliDevam = true;
+            if (okumaDevam || !cb.AcikMi) return;
+            okumaDevam = true;
             try
             {
                 var vals = await Task.Run(() => cb.RegisterlariOkuSync());
                 if (vals != null) GuncelleHepsi(vals);
             }
-            finally { canliDevam = false; }
+            finally { okumaDevam = false; }
+        };
+
+        // Status timer (1 s, always-on after init OK) — shares okumaDevam with canliTimer
+        // so they never overlap on the USB bus.
+        var statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        statusTimer.Tick += async (_, _) =>
+        {
+            if (okumaDevam || !cb.AcikMi) return;
+            okumaDevam = true;
+            try
+            {
+                var vals = await Task.Run(() => cb.RegisterlariOkuSync());
+                if (vals != null) GuncelleHepsi(vals);
+            }
+            finally { okumaDevam = false; }
+        };
+
+        // Kapat: stop timers first, wait for any in-flight read, then Shutdown
+        kapatBtn.Click += async (_, _) =>
+        {
+            canliTimer.Stop();
+            statusTimer.Stop();
+            canliAcik        = false;
+            canliBtn.Content = "▶  Canlı";
+            while (okumaDevam) await Task.Yield();
+            await KapatIsleAsync(cb, acBtn, nodeBox);
         };
 
         // Header: title + buttons right-aligned
@@ -307,7 +332,7 @@ public partial class MainWindow : Window
         // ── Transmit paneli ───────────────────────────────────────────
         var transmitBorder = TransmitPaneliOlustur(cb);
 
-        // ── PropertyChanged: rozet + enable/disable panels ────────────
+        // ── PropertyChanged: rozet + panels + live status timer ─────────
         cb.PropertyChanged += (_, ea) =>
         {
             GuncelleDurum();
@@ -321,9 +346,21 @@ public partial class MainWindow : Window
                     if (!acik)
                     {
                         canliTimer.Stop();
+                        statusTimer.Stop();
                         canliAcik        = false;
                         canliBtn.Content = "▶  Canlı";
+                        agMetin.Text       = "—";
+                        agRozet.Background = new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44));
+                        agMetin.Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86));
                     }
+                });
+            }
+            else if (ea.PropertyName == nameof(CihazBaglanti.InitTamamlandi))
+            {
+                Dispatcher.InvokeAsync(() =>
+                {
+                    if (cb.InitTamamlandi) statusTimer.Start();
+                    else                   statusTimer.Stop();
                 });
             }
         };
@@ -712,6 +749,15 @@ public partial class MainWindow : Window
     {
         if (cb.AcikMi) return;
 
+        // Node ID çakışma kontrolü — sadece bu GUI oturumundaki açık cihazlar arasında
+        var cakisan = _acikCihazlar.FirstOrDefault(o => o != cb && o.AcikMi && o.NodeId == cb.NodeId);
+        if (cakisan != null)
+        {
+            AcLogPanel();
+            LogEkle($"✘  Node ID {cb.NodeId} zaten [{cakisan.KisaAd}] tarafından kullanılıyor — farklı bir ID girin.", BrKirmizi);
+            return;
+        }
+
         acBtn.IsEnabled   = false;
         nodeBox.IsEnabled = false;
         AcLogPanel();
@@ -743,13 +789,18 @@ public partial class MainWindow : Window
         }
     }
 
-    private void KapatIsle(CihazBaglanti cb, Button acBtn, TextBox nodeBox)
+    private async Task KapatIsleAsync(CihazBaglanti cb, Button acBtn, TextBox nodeBox)
     {
-        cb.Kapat();
+        acBtn.IsEnabled = false;
+        AcLogPanel();
+        var r = await cb.KapatAsync(cLog: msg =>
+            Dispatcher.InvokeAsync(() => LogEkle($"  [C] {msg.TrimEnd()}", BrGri)));
         acBtn.IsEnabled   = true;
         nodeBox.IsEnabled = true;
-        AcLogPanel();
-        LogEkle($"● {cb.KisaAd} kapatıldı.", BrGri);
+        if (r == ArcResult.Ok)
+            LogEkle($"● {cb.KisaAd} kapatıldı.", BrGri);
+        else
+            LogEkle($"✘ {cb.KisaAd} kapatılırken arc_shutdown hatası: {ArcnetDevice.ResultString(r)}", BrKirmizi);
     }
 
     private async void KurBtn_Click(object sender, RoutedEventArgs e)
@@ -1326,6 +1377,13 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 
     public bool AcikMi => _dev != null;
 
+    private bool _initTamamlandi;
+    public bool InitTamamlandi
+    {
+        get => _initTamamlandi;
+        private set { if (_initTamamlandi == value) return; _initTamamlandi = value; OnPropertyChanged(); }
+    }
+
     public CihazBaglanti(string devicePath)
     {
         DevicePath = devicePath;
@@ -1362,9 +1420,16 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
             var r = await Task.Run(() => _dev.Init(nodeId));
 
             if (r == ArcResult.Ok)
-                SetDurum($"✔ Init OK (node={nodeId})", BrInitOk, BrYaziInitOk);
+            {
+                InitTamamlandi = true;
+                SetDurum($"✔ Ağda aktif (node={nodeId})", BrInitOk, BrYaziInitOk);
+            }
             else
-                SetDurum($"✘ {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
+            {
+                _dev.Dispose(); _dev = null;
+                OnPropertyChanged(nameof(AcikMi));
+                SetDurum($"✘ Init başarısız: {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
+            }
 
             return r;
         }
@@ -1410,10 +1475,45 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
 
     public void Kapat()
     {
-        _dev?.Dispose();
+        var dev = _dev;
         _dev = null;
+        InitTamamlandi = false;
         OnPropertyChanged(nameof(AcikMi));
         SetDurum("● Kapalı", BrKapali, BrYaziKapali);
+        if (dev != null) try { dev.Shutdown(); } catch { }
+    }
+
+    public async Task<ArcResult> KapatAsync(Action<string>? cLog = null)
+    {
+        var dev = _dev;
+        _dev = null;
+        InitTamamlandi = false;
+        OnPropertyChanged(nameof(AcikMi));
+        SetDurum("● Kapalı", BrKapali, BrYaziKapali);
+        if (dev == null) return ArcResult.Ok;
+        return await Task.Run(() => {
+            try
+            {
+                if (cLog != null)
+                {
+                    dev.SetLogLevel(ArcLogLevel.Info);
+                    dev.SetLogCallback((_, msg) => cLog(msg));
+                }
+                return dev.Shutdown();
+            }
+            catch { return ArcResult.ErrIo; }
+        });
+    }
+
+    public void RaporAgDurumu(byte reg0)
+    {
+        if (_dev == null) return;
+        if ((reg0 & 0x20) != 0)
+            SetDurum($"✔ Ağda aktif (node={_nodeId})", BrInitOk, BrYaziInitOk);
+        else if (reg0 == 0x00)
+            SetDurum("⚠ Ağda DEĞİL", BrHata, BrYaziHata);
+        else
+            SetDurum($"● Geçiş 0x{reg0:X2}", BrAciyor, BrYaziAciyor);
     }
 
     public void Dispose() => Kapat();
