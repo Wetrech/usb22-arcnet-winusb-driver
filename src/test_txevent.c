@@ -39,6 +39,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -214,14 +215,14 @@ int main(int argc, char **argv)
 
     /* ---- Init -------------------------------------------------------- */
     arc_result_t r;
-    r = arc_init(ctx1, NODE1, 0x18, 0x00, false);
+    r = arc_init(ctx1, NODE1, 0x18, TEST_CLOCK_PRESCALER, false);
     if (r != ARC_OK) {
         fprintf(stderr, "[test_txevent] ctx1 init: %s\n", arc_result_str(r));
         arc_close(ctx1); arc_close(ctx2); return 1;
     }
     printf("[test_txevent] ctx1 node=0x%02X OK\n", NODE1);
 
-    r = arc_init(ctx2, NODE2, 0x18, 0x00, false);
+    r = arc_init(ctx2, NODE2, 0x18, TEST_CLOCK_PRESCALER, false);
     if (r != ARC_OK) {
         fprintf(stderr, "[test_txevent] ctx2 init: %s\n", arc_result_str(r));
         arc_close(ctx1); arc_close(ctx2); return 1;

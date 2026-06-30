@@ -182,6 +182,7 @@ const char *arc_result_str(arc_result_t r)
     case ARC_ERR_TIMEOUT:     return "ARC_ERR_TIMEOUT";
     case ARC_ERR_PARAM:       return "ARC_ERR_PARAM";
     case ARC_ERR_ECHO:        return "ARC_ERR_ECHO";
+    case ARC_ERR_BAUD:        return "ARC_ERR_BAUD";
     default:                  return "(unknown)";
     }
 }
@@ -616,8 +617,21 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
     if (r != ARC_OK) goto done;
 
     arc_log_hex(ctx, ARC_LOG_DEBUG, "arc_init: response", resp, xferred);
-    if (xferred >= 6)
-        LINFO(ctx, "arc_init: status=0x%02X\n", resp[4]);
+
+    if (xferred < 6) {
+        LERR(ctx, "arc_init: response too short (%lu B)\n", xferred);
+        r = ARC_ERR_IO;
+        goto done;
+    }
+
+    LINFO(ctx, "arc_init: status=0x%02X\n", resp[4]);
+
+    if (resp[4] != ARC_INIT_STATUS_OK) {
+        LERR(ctx, "arc_init: firmware rejected config -- status=0x%02X"
+             " (wrong bus speed or duplicate node ID)\n", resp[4]);
+        r = ARC_ERR_BAUD;
+        goto done;
+    }
 
     if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_RX_IN,
                                PIPE_TRANSFER_TIMEOUT,

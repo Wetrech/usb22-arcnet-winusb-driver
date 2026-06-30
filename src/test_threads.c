@@ -13,6 +13,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -139,7 +140,7 @@ int main(void)
     /* Init */
     printf("[init] arc_init (nodeID=1) ...\n");
     t0 = GetTickCount64();
-    r  = arc_init(ctx, 1, 0x18, 0x00, /*recvBroadcasts=*/true);
+    r  = arc_init(ctx, 1, 0x18, TEST_CLOCK_PRESCALER, /*recvBroadcasts=*/true);
     t1 = GetTickCount64();
     printf("[init] %s  (%.1f s)\n\n", arc_result_str(r), (double)(t1 - t0) / 1000.0);
     if (r != ARC_OK) {

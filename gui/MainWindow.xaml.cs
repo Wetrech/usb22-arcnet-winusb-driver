@@ -1495,6 +1495,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
     private Task?                     _listenTask;
     private bool                      _dinlemede;  // re-entry guard
     private ArcLogLevel               _logSeviye = ArcLogLevel.Info;
+    private string                    _agHiz     = string.Empty;
 
     public Action<ArcLogLevel, string>? OnLog { get; set; }
 
@@ -1558,38 +1559,69 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         return path.Length > 20 ? path[^20..] : path;
     }
 
+    // Prescaler scan table: tried in order, first ARC_OK wins.
+    // Highest speed first -- prefer 10 Mbps; isolated device also opens at 10 Mbps.
+    // Only ARC_ERR_BAUD (wrong bus speed) advances to the next (lower-speed) entry.
+    // Any other error (device gone, USB IO, ...) stops the scan immediately.
+    private static readonly (byte presc, string hiz)[] PrescalerScan =
+    {
+        (0x0A, "10 Mbps"),
+        (0x05, "5 Mbps"),
+        (0x00, "2.5 Mbps"),
+    };
+
     public async Task<ArcResult> AcVeInit()
     {
         if (_dev != null) return ArcResult.Ok;
 
-        SetDurum("⌛ Açılıyor…", BrAciyor, BrYaziAciyor);
+        byte   nodeId = _nodeId;
+        ArcResult last = ArcResult.ErrBaud;
+
         try
         {
-            _dev = new ArcnetDevice(DevicePath, verbose: false);
-            if (OnLog != null)
+            foreach (var (presc, hiz) in PrescalerScan)
             {
-                _dev.SetLogLevel(_logSeviye);
-                _dev.SetLogCallback(OnLog);
-            }
-            OnPropertyChanged(nameof(AcikMi));
+                SetDurum($"⌛ Init… ({hiz})", BrAciyor, BrYaziAciyor);
 
-            SetDurum("⌛ Init…", BrAciyor, BrYaziAciyor);
-            byte nodeId = _nodeId;
-            var r = await Task.Run(() => _dev.Init(nodeId));
+                _dev = new ArcnetDevice(DevicePath, verbose: false);
+                if (OnLog != null)
+                {
+                    _dev.SetLogLevel(_logSeviye);
+                    _dev.SetLogCallback(OnLog);
+                }
+                OnPropertyChanged(nameof(AcikMi));
 
-            if (r == ArcResult.Ok)
-            {
-                InitTamamlandi = true;
-                SetDurum($"✔ Ağda aktif (node={nodeId})", BrInitOk, BrYaziInitOk);
-            }
-            else
-            {
+                byte p = presc;
+                var r = await Task.Run(() => _dev.Init(nodeId, clockPrescaler: p));
+                last = r;
+
+                if (r == ArcResult.Ok)
+                {
+                    _agHiz = hiz;
+                    InitTamamlandi = true;
+                    SetDurum($"✔ Ağda aktif (node={nodeId}, {hiz})", BrInitOk, BrYaziInitOk);
+                    return ArcResult.Ok;
+                }
+
+                // Wrong bus speed -- clean up and try the next prescaler.
                 _dev.Dispose(); _dev = null;
                 OnPropertyChanged(nameof(AcikMi));
-                SetDurum($"✘ Init başarısız: {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
+
+                if (r != ArcResult.ErrBaud)
+                {
+                    // Real hardware / USB error -- do not hide it behind a speed scan.
+                    SetDurum($"✘ Init başarısız: {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
+                    return r;
+                }
             }
 
-            return r;
+            // All three prescalers rejected by firmware (all returned non-0x22 status).
+            // Protocol notes: BOTH wrong bus speed AND duplicate node ID produce the same
+            // non-0x22 status byte (e.g. 0xFB).  Since 10/5/2.5 Mbps covers every standard
+            // ARCNET speed, an across-the-board failure almost certainly means the node ID
+            // is already in use on the bus -- not a speed mismatch.
+            SetDurum($"✘ Bağlanılamadı — node ID {nodeId} ağda zaten kullanımda olabilir, değiştirin", BrHata, BrYaziHata);
+            return last;
         }
         catch
         {
@@ -1768,12 +1800,13 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
     public void RaporAgDurumu(byte reg0)
     {
         if (_dev == null) return;
+        string hizEki = _agHiz.Length > 0 ? $", {_agHiz}" : string.Empty;
         if ((reg0 & 0x20) != 0)
-            SetDurum($"✔ Ağda aktif (node={_nodeId})", BrInitOk, BrYaziInitOk);
+            SetDurum($"✔ Ağda aktif (node={_nodeId}{hizEki})", BrInitOk, BrYaziInitOk);
         else if (reg0 == 0x00)
-            SetDurum("⚠ Ağda DEĞİL", BrHata, BrYaziHata);
+            SetDurum($"⚠ Ağda DEĞİL{hizEki}", BrHata, BrYaziHata);
         else
-            SetDurum($"● Geçiş 0x{reg0:X2}", BrAciyor, BrYaziAciyor);
+            SetDurum($"● Geçiş 0x{reg0:X2}{hizEki}", BrAciyor, BrYaziAciyor);
     }
 
     public void Dispose() => Kapat();

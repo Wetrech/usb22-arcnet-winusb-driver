@@ -19,6 +19,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -195,7 +196,7 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     printf("[3] Initializing node 1 (nodeID=1) ...\n");
     t0 = GetTickCount64();
-    r  = arc_init(ctx1, 1, 0x18, 0x00, true);
+    r  = arc_init(ctx1, 1, 0x18, TEST_CLOCK_PRESCALER, true);
     t1 = GetTickCount64();
     printf("    arc_init node1: %s  (%.1f s)\n\n", arc_result_str(r),
            (double)(t1 - t0) / 1000.0);
@@ -204,7 +205,7 @@ int main(int argc, char *argv[])
     if (receiver_alive) {
         printf("[3] Initializing node 2 (nodeID=2) ...\n");
         t0 = GetTickCount64();
-        r  = arc_init(ctx2, 2, 0x18, 0x00, true);
+        r  = arc_init(ctx2, 2, 0x18, TEST_CLOCK_PRESCALER, true);
         t1 = GetTickCount64();
         printf("    arc_init node2: %s  (%.1f s)\n\n", arc_result_str(r),
                (double)(t1 - t0) / 1000.0);

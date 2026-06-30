@@ -10,6 +10,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -54,7 +55,7 @@ static const char *resolve_device_path(const char *wmi_id)
 /* ---- Test parameters (adjust as needed) ---- */
 #define TEST_NODE_ID         1
 #define TEST_TIMEOUT         0x18
-#define TEST_CLOCK_PRESCALER 0x00
+/* TEST_CLOCK_PRESCALER — see test_common.h */
 #define TEST_RECV_BCAST      true
 #define TEST_DEST_NODE       2
 #define TEST_PAYLOAD         "HELLO-ARCNET"

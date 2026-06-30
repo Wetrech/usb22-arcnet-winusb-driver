@@ -19,6 +19,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -125,7 +126,7 @@ static arc_ctx_t *open_init(const char *path, uint8_t node, const char *tag)
     arc_ctx_t *ctx = arc_open(path, false);
     if (!ctx) { fprintf(stderr, "[%s] arc_open failed\n", tag); return NULL; }
     arc_set_log_level(ctx, g_lvl);
-    arc_result_t r = arc_init(ctx, node, 0x18, 0x00, false);
+    arc_result_t r = arc_init(ctx, node, 0x18, TEST_CLOCK_PRESCALER, false);
     if (r != ARC_OK) {
         fprintf(stderr, "[%s] arc_init: %s\n", tag, arc_result_str(r));
         arc_close(ctx); return NULL;

@@ -1,6 +1,8 @@
 build/
 build_release/
 out/
+arcx_shim/
+shim/
 *.obj
 *.exe
 *.pdb

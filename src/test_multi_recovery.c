@@ -16,6 +16,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -96,7 +97,7 @@ static void poll_slot(slot_t *s)
             return;
         }
 
-        r = arc_init(s->ctx, (uint8_t)s->node_id, 0x18, 0x00, true);
+        r = arc_init(s->ctx, (uint8_t)s->node_id, 0x18, TEST_CLOCK_PRESCALER, true);
         printf("  [node%d %s]   arc_init   : %s\n",
                s->node_id, s->path_tag, arc_result_str(r));
         if (r != ARC_OK) {
@@ -231,7 +232,7 @@ int main(void)
         printf("[init]  node%d (%s) nodeID=%d ...\n",
                slots[i].node_id, slots[i].path_tag, slots[i].node_id);
         t0 = GetTickCount64();
-        r  = arc_init(slots[i].ctx, (uint8_t)slots[i].node_id, 0x18, 0x00, true);
+        r  = arc_init(slots[i].ctx, (uint8_t)slots[i].node_id, 0x18, TEST_CLOCK_PRESCALER, true);
         t1 = GetTickCount64();
         printf("        arc_init: %s  (%.1f s)\n",
                arc_result_str(r), (double)(t1 - t0) / 1000.0);

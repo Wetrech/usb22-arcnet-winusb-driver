@@ -15,6 +15,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -92,7 +93,7 @@ static void reconnect_loop(arc_ctx_t *ctx)
 
         if (r == ARC_OK) {
             printf("[TEST] arc_reopen OK — calling arc_init ...\n");
-            r = arc_init(ctx, 1, 0x18, 0x00, true);
+            r = arc_init(ctx, 1, 0x18, TEST_CLOCK_PRESCALER, true);
             printf("[TEST] arc_init: %s\n", arc_result_str(r));
             if (r == ARC_OK) {
                 printf("[TEST] === RECONNECTED AND INITIALIZED ===\n\n");
@@ -144,7 +145,7 @@ int main(void)
     /* Init */
     printf("[TEST] arc_init (nodeID=1) ...\n");
     t0 = GetTickCount64();
-    r  = arc_init(ctx, 1, 0x18, 0x00, true);
+    r  = arc_init(ctx, 1, 0x18, TEST_CLOCK_PRESCALER, true);
     t1 = GetTickCount64();
     printf("[TEST] arc_init: %s  (%.1f s)\n\n",
            arc_result_str(r), (double)(t1 - t0) / 1000.0);

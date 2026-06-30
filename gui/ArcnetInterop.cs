@@ -46,6 +46,7 @@ public enum ArcResult : int
     ErrEcho       = -5,
     ErrDeviceGone = -6,
     ErrNetBusy    = -7,
+    ErrBaud       = -8,   /* arc_init: firmware rejected config -- wrong bus speed or dup node ID */
 }
 
 public enum ArcLogLevel : int

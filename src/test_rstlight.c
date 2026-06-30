@@ -19,6 +19,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,7 @@ int main(void)
     }
     arc_set_log_level(ctx, ARC_LOG_INFO);
 
-    arc_result_t r = arc_init(ctx, NODE1, 0x18, 0x00, false);
+    arc_result_t r = arc_init(ctx, NODE1, 0x18, TEST_CLOCK_PRESCALER, false);
     if (r != ARC_OK) {
         fprintf(stderr, "[test_rstlight] arc_init: %s\n", arc_result_str(r));
         arc_close(ctx);

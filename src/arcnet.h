@@ -66,6 +66,12 @@ extern "C" {
 #define ARC_OPCODE_CMD04        0x04u   /*  2 B command / 4 B response (session start) */
 #define ARC_OPCODE_EVENT        0x20u   /* Unsolicited RECON/status event from device  */
 
+/* Init response status byte (resp[4]).
+ * 0x22 = firmware accepted the config and the node joined the ARCNET bus.
+ * Anything else = firmware rejected (wrong bus speed or duplicate node ID).
+ * Measured: presc=0x00/0x05 on a 10 MHz bus -> 0xFB; presc=0x0A -> 0x22. */
+#define ARC_INIT_STATUS_OK      0x22u
+
 /* -----------------------------------------------------------------------
  * Timing constants (milliseconds)
  * --------------------------------------------------------------------- */
@@ -107,6 +113,10 @@ typedef enum {
     ARC_ERR_ECHO        = -5,  /* Response echo mismatch                               */
     ARC_ERR_DEVICE_GONE = -6,  /* Device physically removed; call arc_reopen() + init  */
     ARC_ERR_NET_BUSY    = -7,  /* ARCNET RECON / transmitter not available (transient)  */
+    ARC_ERR_BAUD        = -8,  /* arc_init: firmware rejected config (resp[4] != 0x22)  *
+                                 * Causes: wrong bus speed or duplicate node ID.         *
+                                 * Shim maps this to ArcX USB22_BAUD so callers retry    *
+                                 * with the next speed (P2Downloader speed-scan logic).  */
 } arc_result_t;
 
 /* -----------------------------------------------------------------------

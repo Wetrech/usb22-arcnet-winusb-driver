@@ -26,6 +26,7 @@
  */
 
 #include "arcnet.h"
+#include "test_common.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -144,7 +145,7 @@ int main(void)
             continue;
         }
 
-        r = arc_init(ctx, 1, 0x18, 0x00, /*recvBroadcasts=*/true);
+        r = arc_init(ctx, 1, 0x18, TEST_CLOCK_PRESCALER, /*recvBroadcasts=*/true);
         if (r != ARC_OK) {
             b_init_fail++;
             printf("  [B %2d] arc_init FAIL: %s -- closing cleanly\n",
