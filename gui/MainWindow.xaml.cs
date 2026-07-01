@@ -53,13 +53,13 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AcLogPanel();
-            LogEkle($"arc_list_devices hatası: {ex.Message}", BrKirmizi);
+            LogEkle($"arc_list_devices error: {ex.Message}", BrKirmizi);
             return;
         }
 
         if (paths.Length == 0)
         {
-            StatusBar.Text = "ARC cihazı bulunamadı — WinUSB sürücüsü kurulu mu?";
+            StatusBar.Text = "No ARC device found — is the WinUSB driver installed?";
             return;
         }
 
@@ -71,7 +71,7 @@ public partial class MainWindow : Window
         }
 
         AnaTablar.SelectedIndex = AnaTablar.Items.Count - 1;
-        StatusBar.Text = $"{paths.Length} ARC cihazı bulundu — sekmeleri kullanarak bağlanın.";
+        StatusBar.Text = $"{paths.Length} ARC device(s) found — use the tabs to connect.";
     }
 
     private TabItem CihazTabOlustur(CihazBaglanti cb)
@@ -134,14 +134,14 @@ public partial class MainWindow : Window
         // ── Aç+Init / Kapat butonları ──────────────────────────────────
         var acBtn = new Button
         {
-            Content  = "Aç+Init",
+            Content  = "Open+Init",
             Style    = (Style)FindResource("TestButton"),
             Margin   = new Thickness(0, 0, 8, 0),
             MinWidth = 90,
         };
         var kapatBtn = new Button
         {
-            Content  = "Kapat",
+            Content  = "Close",
             Style    = (Style)FindResource("RefreshButton"),
             MinWidth = 70,
         };
@@ -160,7 +160,7 @@ public partial class MainWindow : Window
         // ── Ağ durumu rozeti ─────────────────────────────────────────
         var agMetin = new TextBlock
         {
-            Text              = "— henüz okunmadı",
+            Text              = "— not yet read",
             FontFamily        = new FontFamily("Segoe UI"),
             FontSize          = 11,
             FontWeight        = FontWeights.SemiBold,
@@ -177,7 +177,7 @@ public partial class MainWindow : Window
         };
         var agNot = new TextBlock
         {
-            Text              = "(reg0 yorumu — gözleme dayalı, kesin teşhis değil)",
+            Text              = "(reg0 interpretation — observation-based, not definitive)",
             FontFamily        = new FontFamily("Segoe UI"),
             FontSize          = 10,
             Foreground        = new SolidColorBrush(Color.FromRgb(0x58, 0x5B, 0x70)),
@@ -193,19 +193,19 @@ public partial class MainWindow : Window
             string text; Color arka, yazi;
             if ((reg0 & 0x20) != 0)
             {
-                text = "● Ağda aktif";
+                text = "● Active on network";
                 arka = Color.FromRgb(0x26, 0x4A, 0x2E);
                 yazi = Color.FromRgb(0xA6, 0xE3, 0xA1);
             }
             else if (reg0 == 0x00)
             {
-                text = "● Ağ yok / token yok";
+                text = "● No network / no token";
                 arka = Color.FromRgb(0x4A, 0x1F, 0x1F);
                 yazi = Color.FromRgb(0xF3, 0x8B, 0xA8);
             }
             else
             {
-                text = $"● Geçiş / belirsiz  (0x{reg0:X2})";
+                text = $"● Transitioning / uncertain  (0x{reg0:X2})";
                 arka = Color.FromRgb(0x4A, 0x3B, 0x1A);
                 yazi = Color.FromRgb(0xF9, 0xE2, 0xAF);
             }
@@ -223,14 +223,14 @@ public partial class MainWindow : Window
 
         var okuBtn = new Button
         {
-            Content  = "Oku",
+            Content  = "Read",
             Style    = (Style)FindResource("RefreshButton"),
             MinWidth = 60,
             Margin   = new Thickness(0, 0, 8, 0),
         };
         var canliBtn = new Button
         {
-            Content  = "▶  Canlı",
+            Content  = "▶  Live",
             Style    = (Style)FindResource("ScanButton"),
             MinWidth = 90,
         };
@@ -253,8 +253,8 @@ public partial class MainWindow : Window
         canliBtn.Click += (_, _) =>
         {
             canliAcik = !canliAcik;
-            if (canliAcik) { canliTimer.Start(); canliBtn.Content = "■  Durdur"; }
-            else           { canliTimer.Stop();  canliBtn.Content = "▶  Canlı";  }
+            if (canliAcik) { canliTimer.Start(); canliBtn.Content = "■  Stop"; }
+            else           { canliTimer.Stop();  canliBtn.Content = "▶  Live";  }
         };
 
         canliTimer.Tick += async (_, _) =>
@@ -291,7 +291,7 @@ public partial class MainWindow : Window
             canliTimer.Stop();
             statusTimer.Stop();
             canliAcik        = false;
-            canliBtn.Content = "▶  Canlı";
+            canliBtn.Content = "▶  Live";
             while (okumaDevam) await Task.Yield();
             await KapatIsleAsync(cb, acBtn, nodeBox);
         };
@@ -303,7 +303,7 @@ public partial class MainWindow : Window
 
         var regTitle = new TextBlock
         {
-            Text              = "Register Paneli  (COM20022)",
+            Text              = "Register Panel  (COM20022)",
             FontFamily        = new FontFamily("Segoe UI"),
             FontSize          = 11,
             FontWeight        = FontWeights.SemiBold,
@@ -364,7 +364,7 @@ public partial class MainWindow : Window
                         canliTimer.Stop();
                         statusTimer.Stop();
                         canliAcik        = false;
-                        canliBtn.Content = "▶  Canlı";
+                        canliBtn.Content = "▶  Live";
                         agMetin.Text       = "—";
                         agRozet.Background = new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44));
                         agMetin.Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86));
@@ -435,14 +435,14 @@ public partial class MainWindow : Window
         // ── Butonlar ──────────────────────────────────────────────
         var dinleBtn = new Button
         {
-            Content  = "▶  Dinlemeyi Başlat",
+            Content  = "▶  Start Listening",
             Style    = (Style)FindResource("ScanButton"),
             MinWidth = 160,
             Margin   = new Thickness(0, 0, 8, 0),
         };
         var temizleBtn = new Button
         {
-            Content  = "Temizle",
+            Content  = "Clear",
             Style    = (Style)FindResource("RefreshButton"),
             MinWidth = 70,
         };
@@ -450,7 +450,7 @@ public partial class MainWindow : Window
         // ── Header ───────────────────────────────────────────────
         var baslik = new TextBlock
         {
-            Text              = "Paket Akışı",
+            Text              = "Packet Stream",
             FontFamily        = ff,
             FontSize          = 11,
             FontWeight        = FontWeights.SemiBold,
@@ -504,7 +504,7 @@ public partial class MainWindow : Window
             if (listBox.Items.Count > 200)
                 listBox.Items.RemoveAt(200);
             paketSayaci++;
-            sayacMetin.Text = $"({paketSayaci} paket)";
+            sayacMetin.Text = $"({paketSayaci} packets)";
         }
 
         // ── Dinle / Durdur toggle ─────────────────────────────────
@@ -518,19 +518,19 @@ public partial class MainWindow : Window
                     onHata:  msg  => Dispatcher.BeginInvoke(() =>
                     {
                         EkleItem($"[!] {msg}");
-                        dinleBtn.Content    = "▶  Dinlemeyi Başlat";
+                        dinleBtn.Content    = "▶  Start Listening";
                         dinleBtn.IsEnabled  = true;
                     })
                 );
                 if (ok)
-                    dinleBtn.Content = "■  Durdur";
+                    dinleBtn.Content = "■  Stop";
                 dinleBtn.IsEnabled = true;
             }
             else
             {
                 dinleBtn.IsEnabled = false;
                 await cb.DinlemeDurdurAsync();
-                dinleBtn.Content   = "▶  Dinlemeyi Başlat";
+                dinleBtn.Content   = "▶  Start Listening";
                 dinleBtn.IsEnabled = true;
             }
         };
@@ -550,7 +550,7 @@ public partial class MainWindow : Window
             {
                 // Device closed — reset button state (DinlemeDurdurAsync already called
                 // in KapatIsleAsync before arc_close, so task is already stopped).
-                dinleBtn.Content   = "▶  Dinlemeyi Başlat";
+                dinleBtn.Content   = "▶  Start Listening";
                 dinleBtn.IsEnabled = true;
             }
         }
@@ -685,7 +685,7 @@ public partial class MainWindow : Window
 
         var metinRadio = new RadioButton
         {
-            Content = "Metin", IsChecked = true,
+            Content = "Text", IsChecked = true,
             Foreground = wh, VerticalAlignment = VerticalAlignment.Center,
             FontFamily = ff, FontSize = 12, Margin = new Thickness(0, 0, 12, 0),
         };
@@ -698,13 +698,13 @@ public partial class MainWindow : Window
 
         var ackCheck = new CheckBox
         {
-            Content = "ACK Bekle", IsChecked = true,
+            Content = "Wait for ACK", IsChecked = true,
             Foreground = wh, VerticalAlignment = VerticalAlignment.Center,
             FontFamily = ff, FontSize = 12,
         };
 
         var ayarSatiri = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        ayarSatiri.Children.Add(new TextBlock { Text = "Hedef:", Foreground = wh, FontFamily = ff, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+        ayarSatiri.Children.Add(new TextBlock { Text = "Destination:", Foreground = wh, FontFamily = ff, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         ayarSatiri.Children.Add(hedefBox);
         ayarSatiri.Children.Add(metinRadio);
         ayarSatiri.Children.Add(hexRadio);
@@ -712,7 +712,7 @@ public partial class MainWindow : Window
 
         var veriBox = new TextBox
         {
-            Text = "Merhaba ARCNET",
+            Text = "Hello ARCNET",
             FontFamily = mono, FontSize = 12,
             Foreground = wh, Background = surf, BorderBrush = brd, BorderThickness = new Thickness(1),
             Padding = new Thickness(6, 5, 6, 5), VerticalContentAlignment = VerticalAlignment.Center,
@@ -721,7 +721,7 @@ public partial class MainWindow : Window
         };
         var veriHint = new TextBlock
         {
-            Text = "Metin modu: yazı yazın   |   Hex modu: boşlukla ayrılmış baytlar, örn: 48 65 6C 6C 6F",
+            Text = "Text mode: type your text   |   Hex mode: space-separated bytes, e.g. 48 65 6C 6C 6F",
             FontFamily = ff, FontSize = 9, Foreground = dim, Margin = new Thickness(0, 2, 0, 0),
         };
 
@@ -747,7 +747,7 @@ public partial class MainWindow : Window
 
         var gonderBtn = new Button
         {
-            Content = "⬆  Gönder", Style = (Style)FindResource("TestButton"), MinWidth = 100,
+            Content = "⬆  Send", Style = (Style)FindResource("TestButton"), MinWidth = 100,
         };
         var gonderSatiri = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         gonderSatiri.Children.Add(gonderBtn);
@@ -757,7 +757,7 @@ public partial class MainWindow : Window
         {
             if (!byte.TryParse(hedefBox.Text.Trim(), out byte dest) || dest == 0)
             {
-                GosterSonuc("✘ Geçersiz hedef (1-255)",
+                GosterSonuc("✘ Invalid destination (1-255)",
                     Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
                 return;
             }
@@ -768,7 +768,7 @@ public partial class MainWindow : Window
                 string txt = veriBox.Text;
                 if (string.IsNullOrEmpty(txt))
                 {
-                    GosterSonuc("✘ Veri boş olamaz",
+                    GosterSonuc("✘ Data cannot be empty",
                         Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
                     return;
                 }
@@ -779,13 +779,13 @@ public partial class MainWindow : Window
                 try   { data = ParseHex(veriBox.Text); }
                 catch (Exception ex)
                 {
-                    GosterSonuc($"✘ Hex hatası: {ex.Message}",
+                    GosterSonuc($"✘ Hex error: {ex.Message}",
                         Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
                     return;
                 }
                 if (data.Length == 0)
                 {
-                    GosterSonuc("✘ Veri boş olamaz",
+                    GosterSonuc("✘ Data cannot be empty",
                         Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
                     return;
                 }
@@ -793,17 +793,17 @@ public partial class MainWindow : Window
 
             if (data.Length > 508)
             {
-                GosterSonuc($"✘ Veri çok uzun ({data.Length} bayt, max 508)",
+                GosterSonuc($"✘ Data too long ({data.Length} bytes, max 508)",
                     Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
                 return;
             }
 
             bool deadZone = data.Length >= 254 && data.Length <= 256;
             if (deadZone)
-                GosterSonuc($"⚠ {data.Length} bayt (254-256 ölü bölge, güvenilmez) — yine de deneniyor…",
+                GosterSonuc($"⚠ {data.Length} bytes (254–256 dead zone, unreliable) — sending anyway…",
                     Color.FromRgb(0x4A, 0x3B, 0x1A), Color.FromRgb(0xF9, 0xE2, 0xAF));
             else
-                GosterSonuc("⏳ Gönderiliyor…",
+                GosterSonuc("⏳ Sending…",
                     Color.FromRgb(0x31, 0x32, 0x44), Color.FromRgb(0x6C, 0x70, 0x86));
 
             bool waitAck = ackCheck.IsChecked == true;
@@ -811,8 +811,8 @@ public partial class MainWindow : Window
             AcLogPanel();
             string ozet = data.Length <= 32
                 ? "\"" + new string(data.Select(b => b >= 32 && b < 127 ? (char)b : '.').ToArray()) + "\""
-                : "[" + data.Length + " bayt: " + string.Join(" ", data.Take(8).Select(b => $"{b:X2}")) + (data.Length > 8 ? "…" : "") + "]";
-            LogEkle($"→ [{cb.KisaAd} → node {dest}]  {data.Length} bayt  waitAck={waitAck}  {ozet}", BrMavi);
+                : "[" + data.Length + " bytes: " + string.Join(" ", data.Take(8).Select(b => $"{b:X2}")) + (data.Length > 8 ? "…" : "") + "]";
+            LogEkle($"→ [{cb.KisaAd} → node {dest}]  {data.Length} B  waitAck={waitAck}  {ozet}", BrMavi);
 
             gonderBtn.IsEnabled = false;
             ArcResult r;
@@ -822,24 +822,24 @@ public partial class MainWindow : Window
             switch (r)
             {
                 case ArcResult.Ok:
-                    GosterSonuc("✔ Gönderildi (ACK alındı)",
+                    GosterSonuc("✔ Sent (ACK received)",
                         Color.FromRgb(0x26, 0x4A, 0x2E), Color.FromRgb(0xA6, 0xE3, 0xA1));
-                    LogEkle("  ✔ ARC_OK — ACK alındı.", BrYesil);
+                    LogEkle("  ✔ ARC_OK — ACK received.", BrYesil);
                     break;
                 case ArcResult.NotAcked:
-                    GosterSonuc("⚠ Gönderildi ama ACK yok (alıcı pasif?)",
+                    GosterSonuc("⚠ Sent but no ACK (receiver inactive?)",
                         Color.FromRgb(0x4A, 0x3B, 0x1A), Color.FromRgb(0xF9, 0xE2, 0xAF));
-                    LogEkle("  ⚠ ARC_NOT_ACKED — alıcı yok veya init edilmemiş.", BrSari);
+                    LogEkle("  ⚠ ARC_NOT_ACKED — no receiver or not initialized.", BrSari);
                     break;
                 case ArcResult.ErrNetBusy:
-                    GosterSonuc("⚠ Ağ meşgul, tekrar dene",
+                    GosterSonuc("⚠ Network busy, retry",
                         Color.FromRgb(0x4A, 0x3B, 0x1A), Color.FromRgb(0xF9, 0xE2, 0xAF));
-                    LogEkle("  ⚠ ARC_ERR_NET_BUSY — ağ geçici meşgul.", BrSari);
+                    LogEkle("  ⚠ ARC_ERR_NET_BUSY — network temporarily busy.", BrSari);
                     break;
                 case ArcResult.ErrDeviceGone:
-                    GosterSonuc("✘ Cihaz çekildi",
+                    GosterSonuc("✘ Device disconnected",
                         Color.FromRgb(0x4A, 0x1F, 0x1F), Color.FromRgb(0xF3, 0x8B, 0xA8));
-                    LogEkle("  ✘ ARC_ERR_DEVICE_GONE — cihaz bağlantısı kesildi.", BrKirmizi);
+                    LogEkle("  ✘ ARC_ERR_DEVICE_GONE — device disconnected.", BrKirmizi);
                     break;
                 default:
                     string rs = ArcnetDevice.ResultString(r);
@@ -852,7 +852,7 @@ public partial class MainWindow : Window
 
         var baslik = new TextBlock
         {
-            Text = "Manuel Gönder",
+            Text = "Manual Send",
             FontFamily = ff, FontSize = 11, FontWeight = FontWeights.SemiBold,
             Foreground = C(0x89, 0xB4, 0xFA),
         };
@@ -894,14 +894,14 @@ public partial class MainWindow : Window
         if (cakisan != null)
         {
             AcLogPanel();
-            LogEkle($"✘  Node ID {cb.NodeId} zaten [{cakisan.KisaAd}] tarafından kullanılıyor — farklı bir ID girin.", BrKirmizi);
+            LogEkle($"✘  Node ID {cb.NodeId} already in use by [{cakisan.KisaAd}] — choose a different ID.", BrKirmizi);
             return;
         }
 
         acBtn.IsEnabled   = false;
         nodeBox.IsEnabled = false;
         AcLogPanel();
-        LogEkle($"Bağlanıyor: {cb.KisaAd}  (node {cb.NodeId})", BrMavi);
+        LogEkle($"Connecting: {cb.KisaAd}  (node {cb.NodeId})", BrMavi);
 
         try
         {
@@ -911,7 +911,7 @@ public partial class MainWindow : Window
                 LogEkle($"✔  {cb.KisaAd} → Init OK (node={cb.NodeId})", BrYesil);
             else
             {
-                LogEkle($"✘  {cb.KisaAd} → Init başarısız: {ArcnetDevice.ResultString(r)}", BrKirmizi);
+                LogEkle($"✘  {cb.KisaAd} → Init failed: {ArcnetDevice.ResultString(r)}", BrKirmizi);
                 acBtn.IsEnabled   = true;
                 nodeBox.IsEnabled = true;
             }
@@ -924,7 +924,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LogEkle($"✘  {cb.KisaAd} → Beklenmeyen hata: {ex.Message}", BrKirmizi);
+            LogEkle($"✘  {cb.KisaAd} → Unexpected error: {ex.Message}", BrKirmizi);
             acBtn.IsEnabled   = true;
             nodeBox.IsEnabled = true;
         }
@@ -939,9 +939,9 @@ public partial class MainWindow : Window
         acBtn.IsEnabled   = true;
         nodeBox.IsEnabled = true;
         if (r == ArcResult.Ok)
-            LogEkle($"● {cb.KisaAd} kapatıldı.", BrGri);
+            LogEkle($"● {cb.KisaAd} closed.", BrGri);
         else
-            LogEkle($"✘ {cb.KisaAd} kapatılırken arc_shutdown hatası: {ArcnetDevice.ResultString(r)}", BrKirmizi);
+            LogEkle($"✘ {cb.KisaAd} arc_shutdown error while closing: {ArcnetDevice.ResultString(r)}", BrKirmizi);
     }
 
     private async void KurBtn_Click(object sender, RoutedEventArgs e)
@@ -953,7 +953,7 @@ public partial class MainWindow : Window
 
         if (driverDir == null)
         {
-            LogEkle("HATA: driver/ klasörü bulunamadı.", BrKirmizi);
+            LogEkle("ERROR: driver/ directory not found.", BrKirmizi);
             LogEkle($"  Exe dizini: {AppContext.BaseDirectory}", BrSari);
             return;
         }
@@ -962,7 +962,7 @@ public partial class MainWindow : Window
 
         KurBtn.IsEnabled    = false;
         YenileBtn.IsEnabled = false;
-        KurBtn.Content      = "⏳  Kuruluyor…";
+        KurBtn.Content      = "⏳  Installing…";
 
         bool basarili;
         try
@@ -973,7 +973,7 @@ public partial class MainWindow : Window
         {
             KurBtn.IsEnabled    = true;
             YenileBtn.IsEnabled = true;
-            KurBtn.Content      = "⬇  WinUSB Sürücüsünü Kur";
+            KurBtn.Content      = "⬇  Install WinUSB Driver";
         }
 
         if (basarili)
@@ -982,13 +982,13 @@ public partial class MainWindow : Window
             switch (KurulumSonrasiTara())
             {
                 case KurulumSonucu.WinUsbHazir:
-                    LogEkle("✔  Sürücü kuruldu ve cihaz hazır (WinUSB).", BrYesil);
+                    LogEkle("✔  Driver installed and device ready (WinUSB).", BrYesil);
                     break;
                 case KurulumSonucu.CihazYok:
-                    LogEkle("✔  Sürücü paketi sisteme eklendi. Cihazı taktığınızda otomatik tanınacaktır.", BrMavi);
+                    LogEkle("✔  Driver package added to system. Device will be recognized automatically when plugged in.", BrMavi);
                     break;
                 case KurulumSonucu.CihazBootloader:
-                    LogEkle("⚠  Sürücü eklendi. Cihaz hazırlanıyor, birkaç saniye sonra 'Yenile'ye basın.", BrSari);
+                    LogEkle("⚠  Driver added. Device is initializing — click 'Refresh' in a few seconds.", BrSari);
                     break;
             }
             CihazlariTara();
@@ -998,19 +998,19 @@ public partial class MainWindow : Window
     private async Task<bool> SurucuKurAsync(string driverDir)
     {
         string signPs1 = Path.Combine(driverDir, "sign.ps1");
-        LogEkle("── Adım 1/2: Sertifika imzalama", BrMavi);
+        LogEkle("── Step 1/2: Certificate signing", BrMavi);
 
         bool ok = await KomutCalistirAsync(
             "powershell.exe",
             $"-ExecutionPolicy Bypass -NonInteractive -File \"{signPs1}\"",
             driverDir);
 
-        if (!ok) { LogEkle("✘  sign.ps1 başarısız — kurulum durdu.", BrKirmizi); return false; }
-        LogEkle("✔  Adım 1 tamamlandı.", BrYesil);
+        if (!ok) { LogEkle("✘  sign.ps1 failed — installation aborted.", BrKirmizi); return false; }
+        LogEkle("✔  Step 1 complete.", BrYesil);
         LogEkle("", BrGri);
 
         string infPath = Path.Combine(driverDir, "usb22_winusb.inf");
-        LogEkle("── Adım 2/2: Sürücü yükleme (pnputil)", BrMavi);
+        LogEkle("── Step 2/2: Driver installation (pnputil)", BrMavi);
 
         var pnpCikti = new List<string>();
         ok = await KomutCalistirAsync(
@@ -1022,7 +1022,7 @@ public partial class MainWindow : Window
 
         if (!ok)
         {
-            LogEkle("✘  pnputil başarısız — sürücü yüklenemedi.", BrKirmizi);
+            LogEkle("✘  pnputil failed — driver could not be installed.", BrKirmizi);
             return false;
         }
 
@@ -1032,8 +1032,8 @@ public partial class MainWindow : Window
             s.Contains("added successfully", StringComparison.OrdinalIgnoreCase));
 
         LogEkle(zatenGuncel
-            ? "✔  Sürücü zaten yüklü ve güncel."
-            : "✔  Adım 2 tamamlandı.", BrYesil);
+            ? "✔  Driver already installed and up to date."
+            : "✔  Step 2 complete.", BrYesil);
         return true;
     }
 
@@ -1045,19 +1045,19 @@ public partial class MainWindow : Window
         var secili = CihazListesi.SelectedItem as CihazSatiri;
         if (secili == null)
         {
-            LogEkle("Lütfen listeden bir cihaz seçin.", BrSari);
+            LogEkle("Please select a device from the list.", BrSari);
             return;
         }
 
         string? testExe = TestExeBul();
         if (testExe == null)
         {
-            LogEkle("HATA: test_arcnet.exe bulunamadı — önce 'build.bat' ile derleyin.", BrKirmizi);
+            LogEkle("ERROR: test_arcnet.exe not found — build it first with 'build.bat'.", BrKirmizi);
             return;
         }
 
         SetTestUI(calisiyor: true);
-        TestBtn.Content = "⏳  Test çalışıyor…";
+        TestBtn.Content = "⏳  Testing…";
         try
         {
             await TestEtVeGuncelle(secili, testExe, logBaslik: true);
@@ -1065,7 +1065,7 @@ public partial class MainWindow : Window
         finally
         {
             SetTestUI(calisiyor: false);
-            TestBtn.Content = "▶  Seçiliyi Test Et";
+            TestBtn.Content = "▶  Test Selected";
         }
     }
 
@@ -1077,27 +1077,27 @@ public partial class MainWindow : Window
         var cihazlar = (CihazListesi.ItemsSource as IEnumerable<CihazSatiri>)?.ToList();
         if (cihazlar == null || cihazlar.Count == 0)
         {
-            LogEkle("Listede cihaz yok — önce 'Yenile'ye basın.", BrSari);
+            LogEkle("No devices in list — click 'Refresh' first.", BrSari);
             return;
         }
 
         string? testExe = TestExeBul();
         if (testExe == null)
         {
-            LogEkle("HATA: test_arcnet.exe bulunamadı — önce 'build.bat' ile derleyin.", BrKirmizi);
+            LogEkle("ERROR: test_arcnet.exe not found — build it first with 'build.bat'.", BrKirmizi);
             return;
         }
 
         SetTestUI(calisiyor: true);
-        HepsiniTestBtn.Content = "⏳  Test ediliyor…";
+        HepsiniTestBtn.Content = "⏳  Testing…";
         int basarili = 0;
         try
         {
             for (int idx = 0; idx < cihazlar.Count; idx++)
             {
                 var c = cihazlar[idx];
-                StatusBar.Text = $"Cihaz {idx + 1}/{cihazlar.Count} test ediliyor…";
-                LogEkle($"── Cihaz {idx + 1}/{cihazlar.Count}: {KisaPath(c.InstancePath)}", BrMavi);
+                StatusBar.Text = $"Testing device {idx + 1}/{cihazlar.Count}…";
+                LogEkle($"── Device {idx + 1}/{cihazlar.Count}: {KisaPath(c.InstancePath)}", BrMavi);
 
                 bool ok = await TestEtVeGuncelle(c, testExe, logBaslik: false);
                 if (ok) basarili++;
@@ -1105,13 +1105,13 @@ public partial class MainWindow : Window
                 LogEkle("", BrGri);
             }
 
-            LogEkle($"─── Tamamlandı: {basarili}/{cihazlar.Count} başarılı ───",
+            LogEkle($"─── Done: {basarili}/{cihazlar.Count} successful ───",
                 basarili == cihazlar.Count ? BrYesil : BrSari);
         }
         finally
         {
             SetTestUI(calisiyor: false);
-            HepsiniTestBtn.Content = "▶▶  Hepsini Test Et";
+            HepsiniTestBtn.Content = "▶▶  Test All";
         }
     }
 
@@ -1148,23 +1148,23 @@ public partial class MainWindow : Window
             s.Contains("device gone") || s.Contains("hardware error"));
 
         LogEkle("", BrGri);
-        LogEkle("── Sonuç ──────────────────────────────────────", BrGri);
+        LogEkle("── Result ──────────────────────────────────────", BrGri);
 
         if (hardHata)
         {
             string satir = satirlar.FirstOrDefault(s =>
                 s.Contains("ARC_ERR_IO") || s.Contains("ARC_ERR_DEVICE_GONE") ||
                 s.Contains("device gone") || s.Contains("hardware error")) ?? "";
-            LogEkle($"✘  Cihaza erişilemedi / donanım hatası: {satir.Trim()}", BrKirmizi);
+            LogEkle($"✘  Device unreachable / hardware error: {satir.Trim()}", BrKirmizi);
             return false;
         }
 
         if (!openOk || !initOk)
         {
             if (!openOk)
-                LogEkle("✘  arc_open başarısız — cihaz bulunamadı veya sürücü yüklü değil.", BrKirmizi);
+                LogEkle("✘  arc_open failed — device not found or driver not installed.", BrKirmizi);
             else
-                LogEkle("✘  arc_init başarısız — cihaz açıldı ama başlatılamadı.", BrKirmizi);
+                LogEkle("✘  arc_init failed — device opened but could not initialize.", BrKirmizi);
             return false;
         }
 
@@ -1173,19 +1173,19 @@ public partial class MainWindow : Window
         bool netBusy        = satirlar.Any(s => s.Contains("ARC_ERR_NET_BUSY"));
 
         if (transmitAck)
-            LogEkle("✔  Cihaz çalışıyor (paket ACK'lendi)", BrYesil);
+            LogEkle("✔  Device working (packet ACKed)", BrYesil);
         else if (transmitNotAck)
         {
-            LogEkle("✔  Cihaz çalışıyor", BrYesil);
-            LogEkle("   (ağda paketi onaylayan aktif bir node yok — tek cihaz testinde normaldir)", BrSari);
+            LogEkle("✔  Device working", BrYesil);
+            LogEkle("   (no active node on network to ACK the packet — normal for single-device test)", BrSari);
         }
         else if (netBusy)
         {
-            LogEkle("✔  Cihaz çalışıyor", BrYesil);
-            LogEkle("   (ağ geçici meşgul — RECON devam ediyor)", BrSari);
+            LogEkle("✔  Device working", BrYesil);
+            LogEkle("   (network temporarily busy — RECON in progress)", BrSari);
         }
         else
-            LogEkle("✔  Cihaz çalışıyor (transmit durumu bilinmiyor)", BrYesil);
+            LogEkle("✔  Device working (transmit status unknown)", BrYesil);
 
         return true;
     }
@@ -1261,7 +1261,7 @@ public partial class MainWindow : Window
 
             if (!proc.Start())
             {
-                LogEkle($"  Süreç başlatılamadı: {Path.GetFileName(exe)}", BrKirmizi);
+                LogEkle($"  Failed to start process: {Path.GetFileName(exe)}", BrKirmizi);
                 return false;
             }
 
@@ -1278,7 +1278,7 @@ public partial class MainWindow : Window
                 catch (OperationCanceledException)
                 {
                     try { proc.Kill(entireProcessTree: true); } catch { }
-                    LogEkle($"  ⏱ Güvenlik zaman aşımı ({timeoutMs / 1000} sn) — process sonlandırıldı.", BrKirmizi);
+                    LogEkle($"  ⏱ Safety timeout ({timeoutMs / 1000} s) — process killed.", BrKirmizi);
                     return false;
                 }
             }
@@ -1289,12 +1289,12 @@ public partial class MainWindow : Window
 
             bool exitOk = proc.ExitCode == 0 || (extraOkCodes?.Contains(proc.ExitCode) ?? false);
             if (!exitOk)
-                LogEkle($"  (çıkış kodu: {proc.ExitCode})", BrKirmizi);
+                LogEkle($"  (exit code: {proc.ExitCode})", BrKirmizi);
             return exitOk;
         }
         catch (Exception ex)
         {
-            LogEkle($"  Süreç başlatılamadı ({Path.GetFileName(exe)}): {ex.Message}", BrKirmizi);
+            LogEkle($"  Failed to start process ({Path.GetFileName(exe)}): {ex.Message}", BrKirmizi);
             return false;
         }
         finally
@@ -1337,8 +1337,8 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
-            Title    = "Log'u Kaydet",
-            Filter   = "Metin dosyası|*.txt|Tüm dosyalar|*.*",
+            Title    = "Save Log",
+            Filter   = "Text file|*.txt|All files|*.*",
             FileName = $"arcnet-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
         };
         if (dlg.ShowDialog() != true) return;
@@ -1436,7 +1436,7 @@ public partial class MainWindow : Window
     {
         if (_testCalisiyor) return;
 
-        StatusBar.Text      = "Taranıyor…";
+        StatusBar.Text      = "Scanning…";
         YenileBtn.IsEnabled = false;
 
         var liste = new List<CihazSatiri>();
@@ -1455,7 +1455,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusBar.Text      = $"WMI hatası: {ex.Message}";
+            StatusBar.Text      = $"WMI error: {ex.Message}";
             YenileBtn.IsEnabled = true;
             return;
         }
@@ -1464,14 +1464,14 @@ public partial class MainWindow : Window
         {
             CihazListesi.Visibility = Visibility.Collapsed;
             BosMesaj.Visibility     = Visibility.Visible;
-            StatusBar.Text          = "Bağlı USB22 cihazı bulunamadı.";
+            StatusBar.Text          = "No USB22 device found.";
         }
         else
         {
             CihazListesi.Visibility  = Visibility.Visible;
             BosMesaj.Visibility      = Visibility.Collapsed;
             CihazListesi.ItemsSource = liste;
-            StatusBar.Text           = $"{liste.Count} cihaz bulundu — son tarama: {DateTime.Now:HH:mm:ss}";
+            StatusBar.Text           = $"{liste.Count} device(s) found — last scan: {DateTime.Now:HH:mm:ss}";
         }
 
         YenileBtn.IsEnabled = true;
@@ -1509,7 +1509,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         set { _nodeId = value; OnPropertyChanged(); }
     }
 
-    private string _durumMetin = "● Kapalı";
+    private string _durumMetin = "● Closed";
     public string DurumMetin
     {
         get => _durumMetin;
@@ -1599,7 +1599,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
                 {
                     _agHiz = hiz;
                     InitTamamlandi = true;
-                    SetDurum($"✔ Ağda aktif (node={nodeId}, {hiz})", BrInitOk, BrYaziInitOk);
+                    SetDurum($"✔ Active on network (node={nodeId}, {hiz})", BrInitOk, BrYaziInitOk);
                     return ArcResult.Ok;
                 }
 
@@ -1610,7 +1610,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
                 if (r != ArcResult.ErrBaud)
                 {
                     // Real hardware / USB error -- do not hide it behind a speed scan.
-                    SetDurum($"✘ Init başarısız: {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
+                    SetDurum($"✘ Init failed: {ArcnetDevice.ResultString(r)}", BrHata, BrYaziHata);
                     return r;
                 }
             }
@@ -1620,14 +1620,14 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
             // non-0x22 status byte (e.g. 0xFB).  Since 10/5/2.5 Mbps covers every standard
             // ARCNET speed, an across-the-board failure almost certainly means the node ID
             // is already in use on the bus -- not a speed mismatch.
-            SetDurum($"✘ Bağlanılamadı — node ID {nodeId} ağda zaten kullanımda olabilir, değiştirin", BrHata, BrYaziHata);
+            SetDurum($"✘ Connection failed — node ID {nodeId} may already be in use on the network, try a different ID", BrHata, BrYaziHata);
             return last;
         }
         catch
         {
             _dev?.Dispose(); _dev = null;
             OnPropertyChanged(nameof(AcikMi));
-            SetDurum("✘ Açılamadı", BrHata, BrYaziHata);
+            SetDurum("✘ Failed to open", BrHata, BrYaziHata);
             throw;
         }
     }
@@ -1710,13 +1710,13 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
                     else
                     {
                         // IO error or device gone — stop and report.
-                        onHata($"Dinleme durdu ({ArcnetDevice.ResultString(pr)})");
+                        onHata($"Listening stopped ({ArcnetDevice.ResultString(pr)})");
                         break;
                     }
                 }
             }
             catch (OperationCanceledException) { /* normal cancellation via Durdur */ }
-            catch (Exception ex) { onHata($"Dinleme hatası: {ex.Message}"); }
+            catch (Exception ex) { onHata($"Listening error: {ex.Message}"); }
             finally
             {
                 try { dev.StopListen(); } catch { }
@@ -1768,7 +1768,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         _dev = null;
         InitTamamlandi = false;
         OnPropertyChanged(nameof(AcikMi));
-        SetDurum("● Kapalı", BrKapali, BrYaziKapali);
+        SetDurum("● Closed", BrKapali, BrYaziKapali);
         if (dev != null) try { dev.Shutdown(); } catch { }
     }
 
@@ -1781,7 +1781,7 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         _dev = null;
         InitTamamlandi = false;
         OnPropertyChanged(nameof(AcikMi));
-        SetDurum("● Kapalı", BrKapali, BrYaziKapali);
+        SetDurum("● Closed", BrKapali, BrYaziKapali);
         if (dev == null) return ArcResult.Ok;
         return await Task.Run(() => {
             try
@@ -1802,11 +1802,11 @@ public class CihazBaglanti : INotifyPropertyChanged, IDisposable
         if (_dev == null) return;
         string hizEki = _agHiz.Length > 0 ? $", {_agHiz}" : string.Empty;
         if ((reg0 & 0x20) != 0)
-            SetDurum($"✔ Ağda aktif (node={_nodeId}{hizEki})", BrInitOk, BrYaziInitOk);
+            SetDurum($"✔ Active on network (node={_nodeId}{hizEki})", BrInitOk, BrYaziInitOk);
         else if (reg0 == 0x00)
-            SetDurum($"⚠ Ağda DEĞİL{hizEki}", BrHata, BrYaziHata);
+            SetDurum($"⚠ NOT on network{hizEki}", BrHata, BrYaziHata);
         else
-            SetDurum($"● Geçiş 0x{reg0:X2}{hizEki}", BrAciyor, BrYaziAciyor);
+            SetDurum($"● Transitioning 0x{reg0:X2}{hizEki}", BrAciyor, BrYaziAciyor);
     }
 
     public void Dispose() => Kapat();
@@ -1872,8 +1872,8 @@ public class CihazSatiri : INotifyPropertyChanged
     public string TestMetin => _testSonucu switch
     {
         TestSonucu.Calisiyor => "⏳ Test…",
-        TestSonucu.Basarili  => "✔ Çalışıyor",
-        TestSonucu.Basarisiz => "✗ Hata",
+        TestSonucu.Basarili  => "✔ Working",
+        TestSonucu.Basarisiz => "✗ Error",
         _                    => "",
     };
 
@@ -1909,16 +1909,16 @@ public class CihazSatiri : INotifyPropertyChanged
     public CihazSatiri(string pid, string service, string name, string instancePath)
     {
         PID           = pid;
-        SurucuServisi = string.IsNullOrEmpty(service) ? "(yok)" : service;
+        SurucuServisi = string.IsNullOrEmpty(service) ? "(none)" : service;
         Aciklama      = name;
         InstancePath  = instancePath;
 
         CihazTipi = pid switch
         {
-            "0x1002" => "Operasyonel (DC-485 Backplane)",
-            "0x1003" => "Operasyonel (DC-485 Normal)",
+            "0x1002" => "Operational (DC-485 Backplane)",
+            "0x1003" => "Operational (DC-485 Normal)",
             "0xB001" or "0xB002" => "Bootloader",
-            _        => "Bilinmiyor",
+            _        => "Unknown",
         };
 
         bool winUsb      = service.Equals("WinUSB", StringComparison.OrdinalIgnoreCase);
@@ -1927,13 +1927,13 @@ public class CihazSatiri : INotifyPropertyChanged
 
         if (operasyonel && winUsb)
         {
-            Durum     = "WinUSB Hazır";
+            Durum     = "WinUSB Ready";
             RozetArka = Fırça(0x26, 0x4A, 0x2E);
             RozetYazi = Fırça(0xA6, 0xE3, 0xA1);
         }
         else if (operasyonel && !string.IsNullOrEmpty(service))
         {
-            Durum     = "Eski Sürücüde";
+            Durum     = "Legacy Driver";
             RozetArka = Fırça(0x4A, 0x3B, 0x1A);
             RozetYazi = Fırça(0xF9, 0xE2, 0xAF);
         }
@@ -1945,7 +1945,7 @@ public class CihazSatiri : INotifyPropertyChanged
         }
         else
         {
-            Durum     = "Sürücüsüz";
+            Durum     = "No Driver";
             RozetArka = Fırça(0x4A, 0x1F, 0x1F);
             RozetYazi = Fırça(0xF3, 0x8B, 0xA8);
         }
