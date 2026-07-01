@@ -214,7 +214,9 @@ static int enum_device_paths(unsigned int vid, unsigned int pid,
          SetupDiEnumDeviceInterfaces(devs, NULL, &GUID_USB_DEVICE, idx, &iface_data);
          idx++) {
 
+        needed = 0;
         SetupDiGetDeviceInterfaceDetailA(devs, &iface_data, NULL, 0, &needed, NULL);
+        if (needed < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A)) continue;
         detail = (PSP_DEVICE_INTERFACE_DETAIL_DATA_A)malloc(needed);
         if (!detail) continue;
         detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
