@@ -79,7 +79,10 @@ extern "C" {
 #define ARC_READ_TIMEOUT_MS     1000u   /* PIPE_TRANSFER_TIMEOUT on EP 0x81         */
 #define ARC_BUDGET_SHORT_MS     1500u   /* Response budget: cmd04 / register        */
 #define ARC_BUDGET_INIT_MS      5000u   /* Response budget: init (~2.5 s on device) */
-#define ARC_RECEIVE_TIMEOUT_MS  150u    /* EP 0x86 / EP 0x02 timeout per arc_receive() poll  */
+#define ARC_RECEIVE_TIMEOUT_MS    5u    /* EP 0x86 timeout per arc_receive() poll; short so
+                                         * empty polls return quickly (WinUSB buffers data --
+                                         * a packet that arrives after the poll still lands in
+                                         * the USB buffer and the next poll catches it).       */
 #define ARC_TRANSMIT_TIMEOUT_MS  2000u  /* EP 0x02 timeout for real arc_transmit()           */
 #define ARC_ACK_EVENT_TIMEOUT_MS  200u  /* EP0x81 wait for TX-complete event after transmit  */
 

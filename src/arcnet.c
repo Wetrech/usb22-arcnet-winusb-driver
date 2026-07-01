@@ -638,6 +638,14 @@ arc_result_t arc_init(arc_ctx_t *ctx, uint8_t nodeID, uint8_t timeout,
                                sizeof(rx_timeout), &rx_timeout))
         LERR(ctx, "arc_init: SetPipePolicy EP0x86 warning GLE=%lu\n", GetLastError());
 
+    {
+        ULONG tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
+        if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
+                                   PIPE_TRANSFER_TIMEOUT,
+                                   sizeof(tx_timeout), &tx_timeout))
+            LERR(ctx, "arc_init: SetPipePolicy EP0x02 warning GLE=%lu\n", GetLastError());
+    }
+
     LINFO(ctx, "arc_init: OK (nodeID=0x%02X)\n", nodeID);
     r = ARC_OK;
 
@@ -781,9 +789,9 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
     BYTE         buf[511];   /* max: 3-byte long-frame header + 508 bytes payload */
     ULONG        xferred;
     ULONG        total_len;
-    ULONG        tx_timeout = ARC_TRANSMIT_TIMEOUT_MS;
     DWORD        err;
     ULONGLONG    ack_start;
+    ULONGLONG    t_tx_start = 0;
 
     if (!ctx) return ARC_ERR_OPEN;
     if (!data || len < 1 || len > 508) {
@@ -792,17 +800,9 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         return ARC_ERR_PARAM;
     }
     EnterCriticalSection(&ctx->lock);
+    t_tx_start = GetTickCount64();
 
     if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
-
-    LDBG(ctx, "arc_transmit: flushing EP0x02 before transmit\n");
-    pipe_flush(ctx, ARC_EP_TX_OUT);
-    if (ctx->device_gone) { r = ARC_ERR_DEVICE_GONE; goto done; }
-
-    if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_TX_OUT,
-                               PIPE_TRANSFER_TIMEOUT,
-                               sizeof(tx_timeout), &tx_timeout))
-        LERR(ctx, "arc_transmit: SetPipePolicy TX_OUT GLE=%lu\n", GetLastError());
 
     if (len <= 253) {
         /* Short frame (UPDATE 2): [dst][256-L][data] */
@@ -876,26 +876,27 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
         BYTE      ev_buf[ARC_EP_EVT_MAXPACKET];
         ULONG     ev_xferred;
         ULONGLONG ack_deadline;
-        ULONG     per_ms;
         BOOL      ev_ok;
         DWORD     ev_err;
+        ULONG     ack_timeout = ARC_ACK_EVENT_TIMEOUT_MS;
 
         ack_start    = GetTickCount64();
         ack_deadline = ack_start + ARC_ACK_EVENT_TIMEOUT_MS;
+
+        if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
+                                   PIPE_TRANSFER_TIMEOUT,
+                                   sizeof(ack_timeout), &ack_timeout))
+            LERR(ctx, "arc_transmit: SetPipePolicy EP0x81 GLE=%lu\n",
+                 GetLastError());
 
         for (;;) {
             ULONGLONG now = GetTickCount64();
             if (now >= ack_deadline) {
                 LINFO(ctx, "arc_transmit: no TX-event in %u ms -> ARC_NOT_ACKED\n",
                       ARC_ACK_EVENT_TIMEOUT_MS);
+                pipe_flush(ctx, ARC_EP_TX_OUT); /* device may have TX pending */
                 r = ARC_NOT_ACKED; goto done;
             }
-            per_ms = (ULONG)(ack_deadline - now);
-            if (!WinUsb_SetPipePolicy(ctx->usb_handle, ARC_EP_EVT_IN,
-                                       PIPE_TRANSFER_TIMEOUT,
-                                       sizeof(per_ms), &per_ms))
-                LERR(ctx, "arc_transmit: SetPipePolicy EP0x81 GLE=%lu\n",
-                     GetLastError());
 
             memset(ev_buf, 0, sizeof(ev_buf));
             ev_xferred = 0;
@@ -905,6 +906,7 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
                 ev_err = GetLastError();
                 if (ev_err == ERROR_SEM_TIMEOUT) {
                     LINFO(ctx, "arc_transmit: EP0x81 timeout -> ARC_NOT_ACKED\n");
+                    pipe_flush(ctx, ARC_EP_TX_OUT); /* device may have TX pending */
                     r = ARC_NOT_ACKED; goto done;
                 }
                 if (is_gone_error(ev_err)) {
@@ -950,6 +952,8 @@ arc_result_t arc_transmit(arc_ctx_t *ctx, uint8_t destNode,
     }
 
 done:
+    LDBG(ctx, "arc_transmit: %lu ms dest=0x%02X len=%d r=%d\n",
+         (ULONG)(GetTickCount64() - t_tx_start), destNode, len, (int)r);
     LeaveCriticalSection(&ctx->lock);
     return r;
 }
@@ -1029,8 +1033,8 @@ static arc_result_t arc_receive_locked(arc_ctx_t *ctx,
     err = GetLastError();
     if (!ok) {
         if (err == ERROR_SEM_TIMEOUT) {
-            LDBG(ctx, "arc_receive: EP0x86 timeout (no packet) -> flush\n");
-            pipe_flush(ctx, ARC_EP_RX_IN);
+            /* WinUSB already aborted the transfer internally on policy timeout;
+             * pipe is clean -- no flush needed. */
             return ARC_NO_PACKET;
         }
         if (is_gone_error(err)) {
